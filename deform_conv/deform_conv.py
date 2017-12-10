@@ -5,12 +5,49 @@ from scipy.ndimage.interpolation import map_coordinates as sp_map_coordinates
 import tensorflow as tf
 
 
+def repeat(A, repeat):
+    # print(A)
+    cast = None
+    if A.dtype != tf.float32 or A.dtype == tf.float64:
+        cast = A.dtype
+
+    if cast is not None:
+        A = tf.cast(A, tf.float32)
+    B = tf.expand_dims(tf.ones([repeat,1]), 1) * A
+
+    if cast is not None:
+        B = tf.cast(B, cast)
+    return B
+
+
+def caster(method):
+    def wrapper(*args, **kwargs):
+        # print(args)
+        A = args[0]
+        repeat = args[1]
+        cast = None
+
+        if A.dtype != tf.float32 or A.dtype == tf.float64:
+            cast = A.dtype
+
+        if cast is not None:
+            A = tf.cast(A, tf.float32)
+
+        B = method(A, repeat)
+
+        if cast is not None:
+            B = tf.cast(B, cast)
+        return B
+    return wrapper
+
+
 def tf_flatten(a):
     """Flatten tensor"""
     return tf.reshape(a, [-1])
 
 
-def tf_repeat(a, repeats, axis=0):
+@caster
+def tf_repeat(a, repeats):
     """TensorFlow version of np.repeat for 1D"""
     # https://github.com/tensorflow/tensorflow/issues/8521
     assert len(a.get_shape()) == 1
@@ -18,15 +55,20 @@ def tf_repeat(a, repeats, axis=0):
     a = tf.expand_dims(a, -1)
     a = tf.tile(a, [1, repeats])
     a = tf_flatten(a)
+
+    # a = repeat(a, repeats)
+    # a = tf.transpose(a)
+    # a = tf_flatten(a)
     return a
 
-
+@caster
 def tf_repeat_2d(a, repeats):
     """Tensorflow version of np.repeat for 2D"""
 
     assert len(a.get_shape()) == 2
     a = tf.expand_dims(a, 0)
     a = tf.tile(a, [repeats, 1, 1])
+    # repeat(a, repeats)
     return a
 
 
@@ -79,7 +121,7 @@ def tf_batch_map_coordinates(input, coords, order=1):
     Parameters
     ----------
     input : tf.Tensor. shape = (b, s, s)
-    coords : tf.Tensor. shape = (b, n_points, 2)
+    coords : tf.Tensor. shape = (b, n_points, 2) -- b * n points' coordinate.
 
     Returns
     -------
@@ -154,9 +196,24 @@ def tf_batch_map_offsets(input, offsets, order=1):
     input_size = input_shape[1]
 
     offsets = tf.reshape(offsets, (batch_size, -1, 2))
+
     grid = tf.meshgrid(
         tf.range(input_size), tf.range(input_size), indexing='ij'
     )
+
+    # grid will consist 2 2D-Array, if "input_size" is 5 grid will look like:
+    # [[ 0.  0.  0.  0.  0.]
+    #  [ 1.  1.  1.  1.  1.]
+    #  [ 2.  2.  2.  2.  2.]
+    #  [ 3.  3.  3.  3.  3.]
+    #  [ 4.  4.  4.  4.  4.]]
+    #
+    # [[ 0.  1.  2.  3.  4.]
+    #  [ 0.  1.  2.  3.  4.]
+    #  [ 0.  1.  2.  3.  4.]
+    #  [ 0.  1.  2.  3.  4.]
+    #  [ 0.  1.  2.  3.  4.]]
+
     grid = tf.stack(grid, axis=-1)
     grid = tf.cast(grid, 'float32')
     grid = tf.reshape(grid, (-1, 2))
