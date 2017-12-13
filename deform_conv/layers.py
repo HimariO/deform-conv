@@ -98,8 +98,10 @@ class ConvOffset2D(Conv2D):
 class InvConv2D(Conv2D):
     def call(self, x):
         # biases_in = 0
-        inv_x = tf.abs(x - 1)
-        return super(InvConv2D, self).call(inv_x)
+        I = tf.sign(x)
+        inv_x = 1 - tf.abs(x)
+
+        return super(InvConv2D, self).call(tf.multiply(I, inv_x))
 
 
 class SpatialPyramidPooling(Layer):

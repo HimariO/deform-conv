@@ -7,7 +7,10 @@
   "target": "/home/share/Ron/deform-conv",
   "ignore": [
     ".remote-sync.json",
-    ".git/**"
+    ".git/**",
+    "*.jpg",
+    "*.h5",
+    "*.npz"
   ],
   "username": "developer",
   "password": "24785699",

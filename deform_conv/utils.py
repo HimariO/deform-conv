@@ -18,10 +18,12 @@ def make_parallel(model, gpu_count):
     def get_slice(data, idx, parts):
         # shape = data.get_shape()
         shape = tf.shape(data)
-        # print('[debug][get_slice] ', data)
-        # print('[debug][get_slice] ', shape)
+        #print('[debug][get_slice] ', data)
+        #print('[debug][get_slice] ', shape)
         size = tf.concat([shape[:1] // parts, shape[1:]], axis=0)
         stride = tf.concat([shape[:1] // parts, shape[1:] * 0], axis=0)
+        #print('[debug][stride] ', stride)
+        #print('[debug][size] ', size)
         start = stride * idx
         return tf.slice(data, start, size)
 
@@ -30,6 +32,7 @@ def make_parallel(model, gpu_count):
         outputs_all.append([])
 
     #Place a copy of the model on each GPU, each getting a slice of the batch
+    
     for i in range(gpu_count):
         with tf.device('/gpu:%d' % i):
             with tf.name_scope('tower_%d' % i) as scope:
@@ -41,6 +44,9 @@ def make_parallel(model, gpu_count):
                     slice_n = Lambda(get_slice, output_shape=input_shape, arguments={'idx':i,'parts':gpu_count})(x)
                     inputs.append(slice_n)
                 outputs = model(inputs)
+                print('-' * 100)
+                print(inputs)
+                print(outputs)
 
                 if not isinstance(outputs, list):
                     outputs = [outputs]
@@ -48,10 +54,12 @@ def make_parallel(model, gpu_count):
                 for l in range(len(outputs)):
                     outputs_all[l].append(outputs[l])
 
+    print('-' * 100)
+    print(outputs_all)
     # merge outputs on CPU
     with tf.device('/cpu:0'):
         merged = []
         for outputs in outputs_all:
             merged.append(concatenate(outputs, axis=0))
 
-        return Model(input=model.inputs, output=merged)
+        return Model(inputs=model.inputs, outputs=merged)

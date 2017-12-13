@@ -46,6 +46,7 @@ def npz_2(root_path, resize=None):
     dataset = {}
     data_size = len(img_all_class)
     num_per_file = data_size // 10 if data_size // 10 < 10000 else 10000
+    num_per_file = 10000
 
     for img_n, i in zip(img_all_class, range(data_size)):
         try:
@@ -70,7 +71,7 @@ def npz_2(root_path, resize=None):
         dataset[img_n['file_name']]['img'] = img
         dataset[img_n['file_name']]['label'] = int(img_n['class'])
 
-        if i % num_per_file == 0 and i != 0:
+        if (i % num_per_file == 0 and i != 0) or i == data_size - 1:
             np.savez(os.path.join(root_path, 'dataset_%d' % (i//num_per_file)), **dataset)
             del dataset
             dataset = {}
@@ -211,9 +212,9 @@ class NPZ_gen:
             # loop through datas inside npy file
             for i in range(0, npz_size, self.batch_size):
                 if (i + self.batch_size) <= npz_size:
-                    B = self._process_data(npz, i, i + self.batch_size, keys, flip=True, random_scale=0.2, random_resize=None)
+                    B = self._process_data(npz, i, i + self.batch_size, keys, flip=True, random_scale=None, random_resize=None)
                     X, Y = B[0], B[1]
-                    yield [X ,Y]
+                    yield X, Y
                 else:
                     break
 
@@ -294,27 +295,62 @@ class NPZ_gen:
         return np.array(input_vec), np.array(output_vec)
 
 
-class NPZ_multi_class(NPZ_gen):
-    def _process_data(self, npz, range_a, range_b):
-        keys = list(npz.keys())
+class NPZ_class_id(NPZ_gen):
+     def _process_data(self, npz, range_a, range_b, keys, flip=False, soft_onthot=True, keras_model=True, random_scale=None, random_resize=None):
+        # keys = list(npz.keys())
         input_vec = []
         output_vec = []
+        label_id_vec = []
+        dummy_target =[]
+
+        if random_resize:
+            if random.random() < 0.333:
+                new_size_scale = 1 - random_resize * random.random()
+            else:
+                new_size_scale = 1
+            # elif random.random() > 0.333 and random.random() < 0.666:
+            #     new_size_scale = 1 + random_resize * random.random() / 2
 
         for img_name in keys[range_a: range_b]:
             item = npz[img_name]
-            img_fp = item['img'] / 255.
-            if len(img_fp.shape) == 2:
-                img_fp = np.expand_dims(img_fp, 2)
-                img_fp = np.repeat(img_fp, 3, axis=2)
+            tar_id = item['label']
+            img_fp = item['img'] / 255. if not keras_model else item['img'].astype(np.float32)
+            if flip:
+                img_fp = np.flip(img_fp, 1) if random.random() > 0.5 else img_fp
+            if random_scale:
+                img_fp *= 1 - random_scale * random.random()
+            if True:
+                img_fp = resize(img_fp, [200, 200, 3], preserve_range=True)
 
+            if random_resize:
+                new_size = int(new_size_scale * img_fp.shape[0])
+                img_fp = resize(img_fp, [new_size, new_size, 3], preserve_range=True)
             img_onehot = np.zeros([self.class_num])
-            for tar_id in item['label']:
-                img_onehot[tar_id] = 1  # int
+
+            # img_onehot[tar_id] = 1  # int
+            if soft_onthot:
+                delta1 = (random.random() - 0.5) * 2 * 0.1 if False else 0
+                delta2 = (random.random() - 0.5) * 2 * 0.1 if False else 0
+
+                if tar_id != 0 and tar_id != self.class_num - 1:
+                    img_onehot[tar_id] = 0.8 + delta1 + delta2  # int
+                    img_onehot[tar_id - 1] = 0.1 + delta1
+                    img_onehot[tar_id + 1] = 0.1 + delta2
+                else:
+                    img_onehot[tar_id] = 0.9 + delta1 # int
+                    if tar_id == 0:
+                        img_onehot[tar_id + 1] = 0.1 + delta1
+                    else:
+                        img_onehot[tar_id - 1] = 0.1 + delta1
+            else:
+                img_onehot[tar_id] = 1
 
             input_vec.append(img_fp)
             output_vec.append(img_onehot)
-            # print(img_fp.shape, img_onehot.shape)
-        return np.array(input_vec), np.array(output_vec)
+            label_id_vec.append(tar_id)
+
+        dummy_target = np.random.rand(range_b - range_a, self.class_num)
+        return [np.array(input_vec), np.array(label_id_vec)], [np.array(output_vec), np.array(dummy_target)]
 
 
 class NPZ_bin_class(NPZ_gen):
@@ -338,9 +374,10 @@ class NPZ_bin_class(NPZ_gen):
             output_vec.append(img_onehot)
             # print(img_fp.shape, img_onehot.shape)
         return np.array(input_vec), np.array(output_vec)
+
 if __name__ == "__main__":
     i = 0
-    npz_2('/home/share/Ron/face_age_ikea', resize=[224, 224])
+    npz_2('../../val_set', resize=[200, 200])
     # GEn = NPZ_gen('./mtcnn_face_age', 10, 32, 1, dataset_size=95000)
 
     # print('Out side')

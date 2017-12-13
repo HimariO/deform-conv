@@ -39,10 +39,10 @@ img_size = 200
 class_num = 6
 batch_size = 32 * GPU_NUM
 # batch_size = 160 * GPU_NUM #  65*65 img
-n_train = (20000 + 16000) * 1  # Currenly using 200*200 & mtcnn 65*65 dataset
+n_train = (16000 + 0) * 1  # Currenly using 200*200 & mtcnn 65*65 dataset
 # n_test = batch_size * 10
 steps_per_epoch = int(np.ceil(n_train / batch_size))
-validation_steps = 4000 // batch_size
+validation_steps = 900 // batch_size
 
 # dataset = NPZ_gen('./mtcnn_face_age', class_num, batch_size, 1000, dataset_size=n_train)
 dataset = NPZ_gen('./face_age_dataset', class_num, batch_size, 1000, dataset_size=n_train)
@@ -78,7 +78,7 @@ with tf.Session(config=config) as sess:
 
         # ---
         # Deformable CNN
-        inputs, outputs = get_large_deform_cnn(class_num, trainable=True)
+        inputs, outputs = get_large_deform_cnn2(class_num, trainable=True, GPU=0)
         model = Model(inputs=inputs, outputs=outputs)
 
         model.summary()
@@ -90,7 +90,7 @@ with tf.Session(config=config) as sess:
             print(colored("[weight] %s" % args.weight, color='green'))
             model.load_weights(args.weight)
 
-        optim = Adam(2e-4)
+        optim = Adam(1e-4)
         # optim = SGD(1e-4, momentum=0.99, nesterov=True)
         loss = categorical_crossentropy
         # model._weights('../models/deform_cnn.h5')

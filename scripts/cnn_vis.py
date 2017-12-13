@@ -38,7 +38,7 @@ parser.add_argument("-i", "--img_dir", help=".h5 model weight file.")
 args = parser.parse_args()
 class_num = 6
 # Build the VGG16 network with ImageNet weights
-inputs, outputs = get_large_deform_inv_cnn(class_num, trainable=False)
+inputs, outputs = get_large_deform_cnn(class_num, trainable=False)
 model = Model(inputs=inputs, outputs=outputs)
 model.load_weights(args.weight)
 # model = load_model(args.weight, custom_objects={'InvConv2D': InvConv2D})
