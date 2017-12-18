@@ -309,7 +309,7 @@ def OrthLocalRegSep2D(W, L=10., ratio=2e-4):
     return cost * ratio
 
 
-def OrthLocalReg1D(W, L=10., ratio=1e-2):
+def OrthLocalReg1D(W, L=10., ratio=1e-3):
     """
     Local orthognal reguliation for 1D FC weight
     W: (input_size, output_size) weight matrix of 1 layer fc-layer.

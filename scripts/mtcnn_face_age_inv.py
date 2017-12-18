@@ -19,7 +19,7 @@ from deform_conv.callbacks import TensorBoard, SpreadSheet
 from deform_conv.cnn import *
 from deform_conv.utils import make_parallel
 
-from dataset_gen import NPZ_gen
+from dataset_gen_ import NPZ_gen
 from PIL import Image
 
 parser = argparse.ArgumentParser()
@@ -39,10 +39,10 @@ img_size = 200
 class_num = 6
 batch_size = 32 * GPU_NUM
 # batch_size = 160 * GPU_NUM #  65*65 img
-n_train = (16000 + 0) * 1  # Currenly using 200*200 & mtcnn 65*65 dataset
+n_train = (88000 + 100000) * 1  # Currenly using 200*200 & mtcnn 65*65 dataset
 # n_test = batch_size * 10
 steps_per_epoch = int(np.ceil(n_train / batch_size))
-validation_steps = 900 // batch_size
+validation_steps = 4000 // batch_size
 
 # dataset = NPZ_gen('./mtcnn_face_age', class_num, batch_size, 1000, dataset_size=n_train)
 dataset = NPZ_gen('./face_age_dataset', class_num, batch_size, 1000, dataset_size=n_train)
@@ -78,7 +78,7 @@ with tf.Session(config=config) as sess:
 
         # ---
         # Deformable CNN
-        inputs, outputs = get_large_deform_cnn2(class_num, trainable=True, GPU=0)
+        inputs, outputs = get_large_res_deform_cnn2(class_num, trainable=True)
         model = Model(inputs=inputs, outputs=outputs)
 
         model.summary()
@@ -106,7 +106,7 @@ with tf.Session(config=config) as sess:
                     train_scaled_gen, steps_per_epoch=steps_per_epoch,
                     epochs=1000, verbose=1,
                     validation_data=test_scaled_gen, validation_steps=validation_steps,
-                    callbacks=[checkpoint, checkpoint_tl, spreadsheet],
+                    callbacks=[checkpoint, checkpoint_tl, spreadsheet], workers=5,
                 )
 
                 val_loss, val_acc = model.evaluate_generator(
@@ -124,6 +124,9 @@ with tf.Session(config=config) as sess:
                     target_size=[img_size, img_size],
                     batch_size=batch_size
                 )
+                # x,y = next(img_gen)
+                # print(x)
+                # input()
 
                 class_dir = [os.path.join(args.img_dir, d) for d in os.listdir(args.img_dir) if os.path.isdir(os.path.join(args.img_dir, d))]
                 img_files = [os.listdir(d) for d in class_dir]

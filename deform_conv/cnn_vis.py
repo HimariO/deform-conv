@@ -1,7 +1,7 @@
 from __future__ import absolute_import, division
 
 
-from keras.layers import Input, Conv2D, SeparableConv2D, Activation, GlobalAvgPool2D, Dense, BatchNormalization, MaxPooling2D, Flatten, Conv2D
+from keras.layers import Input, Conv2D, SeparableConv2D, Activation, GlobalAvgPool2D, Dense, BatchNormalization, MaxPooling2D, Flatten, Conv2D, Lambda
 from keras.layers.merge import concatenate, Add
 from deform_conv.layers import *
 
@@ -37,58 +37,28 @@ def get_cnn():
     return inputs, outputs
 
 
-def get_deform_cnn(trainable):
-    inputs = l = Input((28, 28, 1), name='input')
-
-    # conv11
-    l = Conv2D(32, (3, 3), padding='same', name='conv11', trainable=trainable)(l)
-    l = Activation('relu', name='conv11_relu')(l)
-    l = BatchNormalization(name='conv11_bn')(l)
-
-    # conv12
-    l_offset = ConvOffset2D(32, name='conv12_offset')(l)
-    l = Conv2D(64, (3, 3), padding='same', strides=(2, 2), name='conv12', trainable=trainable)(l_offset)
-    l = Activation('relu', name='conv12_relu')(l)
-    l = BatchNormalization(name='conv12_bn')(l)
-
-    # conv21
-    l_offset = ConvOffset2D(64, name='conv21_offset')(l)
-    l = Conv2D(128, (3, 3), padding='same', name='conv21', trainable=trainable)(l_offset)
-    l = Activation('relu', name='conv21_relu')(l)
-    l = BatchNormalization(name='conv21_bn')(l)
-
-    # conv22
-    l_offset = ConvOffset2D(128, name='conv22_offset')(l)
-    l = Conv2D(128, (3, 3), padding='same', strides=(2, 2), name='conv22', trainable=trainable)(l_offset)
-    l = Activation('relu', name='conv22_relu')(l)
-    l = BatchNormalization(name='conv22_bn')(l)
-
-    # out
-    l = GlobalAvgPool2D(name='avg_pool')(l)
-    l = Dense(10, name='fc1', trainable=trainable)(l)
-    outputs = l = Activation('softmax', name='out')(l)
-
-    return inputs, outputs
-
-def get_large_deform_cnn(class_num, trainable=False):
+def get_large_deform_cnn(class_num, trainable=False, to_TF=False):
     inputs = l = Input((200, 200, 3), name='input')
 
-    # conv11
-    l = Conv2D(32, (3, 3), padding='same', name='conv11', trainable=trainable, kernel_regularizer=OrthLocalReg2D)(l)
-    l = Activation('relu', name='conv11_relu')(l)
-    l = BatchNormalization(name='conv11_bn')(l)
+    # if to_TF:
+    #     l = Lambda(lambda x: 255 * x)(inputs)
 
-    l2 = InvConv2D(32, (3, 3), padding='same', name='inv_conv11', trainable=trainable, kernel_regularizer=OrthLocalReg2D)(inputs)
+    # conv11
+    l2 = InvConv2D(32, (3, 3), padding='same', name='inv_conv11', trainable=trainable, kernel_regularizer=OrthLocalReg2D)(l)
     l2 = Activation('relu', name='inv_conv11_relu')(l2)
     l2 = BatchNormalization(name='inv_conv11_bn')(l2)
 
-    l3 = Conv2D(32, (3, 1), padding='same', name='conv11_2', trainable=trainable, kernel_regularizer=OrthLocalReg2D)(inputs)
+    l3 = Conv2D(32, (3, 1), padding='same', name='conv11_2', trainable=trainable, kernel_regularizer=OrthLocalReg2D)(l)
     l3 = Activation('relu', name='conv11_2_relu')(l3)
     l3 = BatchNormalization(name='conv11_2_bn')(l3)
 
-    l5 = Conv2D(32, (1, 3), padding='same', name='conv11_3', trainable=trainable, kernel_regularizer=OrthLocalReg2D)(inputs)
+    l5 = Conv2D(32, (1, 3), padding='same', name='conv11_3', trainable=trainable, kernel_regularizer=OrthLocalReg2D)(l)
     l5 = Activation('relu', name='conv11_3_relu')(l5)
     l5 = BatchNormalization(name='conv11_3_bn')(l5)
+
+    l = Conv2D(32, (3, 3), padding='same', name='conv11', trainable=trainable, kernel_regularizer=OrthLocalReg2D)(l)
+    l = Activation('relu', name='conv11_relu')(l)
+    l = BatchNormalization(name='conv11_bn')(l)
 
     l = concatenate([l, l2, l3, l5])
 

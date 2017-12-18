@@ -11,7 +11,7 @@ import keras.backend as K
 from keras.models import Model
 from keras.models import load_model
 
-from deform_conv.cnn import *
+from deform_conv.cnn_vis import *
 from deform_conv.layers import *
 from deform_conv.utils import make_parallel
 
@@ -24,7 +24,7 @@ args = parser.parse_args()
 class_num = int(args.class_num) if args.class_num is not None else 6
 
 K.set_learning_phase(0)
-inputs, outputs = get_large_deform_cnn(class_num, trainable=True)
+inputs, outputs = get_large_deform_cnn(class_num, trainable=True, to_TF=True)
 # inputs, outputs = get_large_deform_cnn(class_num, trainable=True)
 model = Model(inputs=inputs, outputs=outputs)
 
@@ -62,10 +62,10 @@ new_outputs = []
 
 if len(model.outputs) > 1:
     for i, n in zip(model.outputs, range(len(model.outputs))):
-        tf.identity(i, 'y_pred_%d' % n)
-        new_outputs.append('y_pred_%d % n')
+        tf.identity(i, name='y_pred_%d' % n)
+        new_outputs.append('y_pred_%d' % n)
 else:
-    tf.identity(model.outputs[0], 'y_pred')
+    tf.identity(model.outputs[0], name='y_pred')
     new_outputs.append('y_pred')
 
 # print(colored('[model.inputs]', color='green'))
@@ -79,7 +79,7 @@ names = [n.name for n in sess.graph.as_graph_def().node]
 t_names = [n.name for n in sess.graph.as_graph_def().node if 'tower' in n.name]
 
 print('-' * 100)
-print(names)
+print([n for n in names if 'pred' in n])
 print('-' * 100)
 # print(t_names)
 

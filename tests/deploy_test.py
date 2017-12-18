@@ -50,7 +50,7 @@ config.gpu_options.allow_growth = True
 with tf.Session(config=config) as sess:
     with tf.device(GPU):
 
-        img_dir = [os.path.join(args.img_dir, d) for d in os.listdir(args.img_dir) if not os.path.isdir(os.path.join(args.img_dir, d))]
+        img_dir = [(os.path.join(args.img_dir, d), int(d)) for d in os.listdir(args.img_dir) if os.path.isdir(os.path.join(args.img_dir, d))]
         inputs = []
 
         if os.path.exists('./test_result'):
@@ -60,12 +60,6 @@ with tf.Session(config=config) as sess:
         for i in range(class_num):
             os.mkdir('./test_result/%d' % i)
 
-        # for img_p in img_dir:
-        #     pil_img = Image.open(img_p)
-        #     pil_img = pil_img.resize([img_size, img_size])
-        #     np_img = np.asarray(pil_img, dtype=np.uint8)
-        #     # np_img /= 255
-        #     inputs.append(np_img)
         c = 0
         counter = {
             0: 0,
@@ -77,16 +71,29 @@ with tf.Session(config=config) as sess:
         }
         ans_list = []
 
-        for x, y in test_scaled_gen:
-            for yy in y:
-                counter[yy.argmax()] += 1
-                ans_list.append(yy.argmax())
-            if c > validation_steps:
-                break
-            inputs += [np_i for np_i in x]
-            # print(inputs)
-            # input()
-            c += 1
+        for img_c, y in img_dir:
+            img_ps = os.listdir(os.path.join(img_c))
+            img_ps = [os.path.join(img_c, p) for p in img_ps]
+
+            for img_p in img_ps:
+                pil_img = Image.open(img_p)
+                pil_img = pil_img.resize([img_size, img_size])
+                np_img = np.asarray(pil_img, dtype=np.uint8)
+                # np_img /= 255
+                inputs.append(np_img)
+                ans_list.append(y)
+                counter[y] += 1
+
+        # for x, y in test_scaled_gen:
+        #     for yy in y:
+        #         counter[yy.argmax()] += 1
+        #         ans_list.append(yy.argmax())
+        #     if c > validation_steps:
+        #         break
+        #     inputs += [np_i for np_i in x]
+        #     # print(inputs)
+        #     # input()
+        #     c += 1
         print(counter)
 
         c = 0
@@ -108,6 +115,9 @@ with tf.Session(config=config) as sess:
             graph_def.ParseFromString(f.read())
 
             names = [n.name for n in graph_def.node]
+            # print('-' * 100)
+            # print(names)
+            # print('-' * 100)
             x, y_pred = tf.import_graph_def(graph_def, return_elements=['input:0', 'y_pred:0'])
 
         for i in range(0, len(inputs), batch_size):

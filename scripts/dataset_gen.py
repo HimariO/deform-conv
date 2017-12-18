@@ -5,6 +5,7 @@ import random
 import threading
 import time
 import colorsys
+import sys
 
 from queue import Queue
 from PIL import Image
@@ -75,6 +76,86 @@ def npz_2(root_path, resize=None):
             np.savez(os.path.join(root_path, 'dataset_%d' % (i//num_per_file)), **dataset)
             del dataset
             dataset = {}
+
+
+def mix_dataset(dir_path):
+
+    def _load_npz(path):
+        print('Load %s' % path)
+        nz = np.load(path)
+        npz = {k: nz[k].tolist() for k in nz}
+        return npz
+
+    train_npzs = [re.match('dataset_(\d+)(_\w+)*\.npz', f) for f in os.listdir(path=dir_path)]
+    val_npzs = [re.match('validate_(\d+)(_\w+)*\.npz', f) for f in os.listdir(path=dir_path)]
+
+    # train_npzs = [os.path.join(dir_path, f.string) for f in train_npzs if f is not None]
+    # val_npzs = [os.path.join(dir_path, f.string) for f in val_npzs if f is not None]
+
+    train_dataset = {
+        "None": []
+    }
+
+    for n in train_npzs:
+        if n is None:
+            continue
+
+        if n.group(2) is None:
+            train_dataset['None'].append(os.path.join(dir_path, n.string))
+        else:
+            try:
+                train_dataset[n.group(2)].append(os.path.join(dir_path, n.string))
+            except KeyError:
+                train_dataset[n.group(2)] = [os.path.join(dir_path, n.string)]
+
+    print(train_dataset)
+
+    set_size = [len(train_dataset[k]) for k in train_dataset.keys()]
+    set_name = list(train_dataset.keys())
+    npz_counter = 0
+
+    for i in range(max(set_size)):
+        mix_set = {}
+        for j in range(len(set_size)):
+            try:
+                file_name = train_dataset[set_name[j]][i]
+                dataset = _load_npz(file_name)
+                mix_set.update(dataset)
+
+            except IndexError:
+                # this dataset have less npz than other.
+                pass
+
+        keys = list(mix_set.keys())
+        random.shuffle(keys)
+
+        new_npz = {}
+        data_num = len(keys)
+        for k, ii in zip(keys, range(data_num)):
+            new_npz[k] = mix_set[k]
+            sys.stdout.write("\r INSERT %d / %d " % (ii, data_num))
+            sys.stdout.flush()
+
+            if (ii != 0 and ii % 10000 == 0) or ii == data_num - 1:
+                npz_counter += 1
+                print('Saving dataset_%d_mix' % npz_counter)
+                np.savez('dataset_%d_mix' % npz_counter, **new_npz)
+                del new_npz
+                new_npz = {}
+
+    # val_dataset = {
+    #     "None": []
+    # }
+    #
+    # for n in val_npzs:
+    #     if n.group(2) is None:
+    #         val_dataset['None'].append(os.path.join(dir_path, n.string))
+    #     else:
+    #         try:
+    #             val_dataset[n.group(2)].append(os.path.join(dir_path, n.string))
+    #         except KeyError:
+    #             val_dataset[n.group(2)] = [os.path.join(dir_path, n.string)]
+    #
 
 
 class threadsafe_iter:
@@ -153,8 +234,8 @@ class NPZ_gen:
         return self.datas + " iteration[%d/%d]" % (self.output_img_num, self.dataset_size)
 
     def _scan_dir(self, path):
-        train_npzs = [re.match('dataset_(\d+)\.npz', f) for f in os.listdir(path=path)]
-        val_npzs = [re.match('validate_(\d+)\.npz', f) for f in os.listdir(path=path)]
+        train_npzs = [re.match('dataset_(\d+)(_\w+)*\.npz', f) for f in os.listdir(path=path)]
+        val_npzs = [re.match('validate_(\d+)(_\w+)*\.npz', f) for f in os.listdir(path=path)]
 
         # [(f.string, int(f.group(1))) for f in train_npzs if f is not None]
         train_npzs = [os.path.join(path, f.string) for f in train_npzs if f is not None]
@@ -212,11 +293,12 @@ class NPZ_gen:
             # loop through datas inside npy file
             for i in range(0, npz_size, self.batch_size):
                 if (i + self.batch_size) <= npz_size:
-                    B = self._process_data(npz, i, i + self.batch_size, keys, flip=True, random_scale=None, random_resize=None)
+                    B = self._process_data(npz, i, i + self.batch_size, keys, soft_onthot=True, flip=True, random_scale=None, random_resize=None, random_crop=0.1)
                     X, Y = B[0], B[1]
                     yield X, Y
                 else:
                     break
+            del npz
 
         self.next_one = 'end'
 
@@ -244,10 +326,17 @@ class NPZ_gen:
             imgs, lab = self._process_data(npz, pick_start, pick_start + self.batch_size, keys, soft_onthot=False)
             yield imgs, lab
 
-    def _process_data(self, npz, range_a, range_b, keys, flip=False, soft_onthot=True, keras_model=True, random_scale=None, random_resize=None):
+    def _process_data(self, npz, range_a, range_b, keys, flip=False, soft_onthot=True, keras_model=True, random_scale=None, random_resize=None, random_crop=None):
         # keys = list(npz.keys())
         input_vec = []
         output_vec = []
+
+        crop_size = []
+        crop_two_side = False
+        crop_top = random.random() < 0.5
+        crop_left = random.random() < 0.5
+        crop_v_h = random.random() < 0.5
+
         if random_resize:
             if random.random() < 0.333:
                 new_size_scale = 1 - random_resize * random.random()
@@ -255,21 +344,46 @@ class NPZ_gen:
                 new_size_scale = 1
             # elif random.random() > 0.333 and random.random() < 0.666:
             #     new_size_scale = 1 + random_resize * random.random() / 2
+        if random_crop:
+            # crop_two_side = random.random() < 0.5
+            crop_two_side = True
+
+            if crop_two_side:
+                crop_size = [random_crop * (1 - random.random() * 0.5)] * 2
+            else:
+                crop_size = [
+                    random_crop * (1 - random.random() * 0.5),
+                ]
+
 
         for img_name in keys[range_a: range_b]:
             item = npz[img_name]
             tar_id = item['label']
             img_fp = item['img'] / 255. if not keras_model else item['img'].astype(np.float32)
+
             if flip:
                 img_fp = np.flip(img_fp, 1) if random.random() > 0.5 else img_fp
             if random_scale:
                 img_fp *= 1 - random_scale * random.random()
-            if True:
-                img_fp = resize(img_fp, [200, 200, 3], preserve_range=True)
+            # if True:
+            #     img_fp = resize(img_fp, [200, 200, 3], preserve_range=True)
+            if random_crop:
+                h, w, c = img_fp.shape
+                crop_size_ = [int(h*f) for f in crop_size]
+
+                if crop_two_side:
+                    img_fp = img_fp[crop_size_[0]:, :, :] if crop_top else img_fp[:h - crop_size_[0], :, :]
+                    img_fp = img_fp[:, crop_size_[1]:, :] if crop_left else img_fp[:, :w - crop_size_[1], :]
+                else:
+                    if crop_v_h:
+                        img_fp = img_fp[crop_size_[0]:, :, :] if crop_top else img_fp[:h - crop_size_[0], :, :]
+                    else:
+                        img_fp = img_fp[:, crop_size_[0]:, :] if crop_left else img_fp[:, :w - crop_size_[0], :]
 
             if random_resize:
                 new_size = int(new_size_scale * img_fp.shape[0])
                 img_fp = resize(img_fp, [new_size, new_size, 3], preserve_range=True)
+
             img_onehot = np.zeros([self.class_num])
 
             # img_onehot[tar_id] = 1  # int
@@ -319,8 +433,8 @@ class NPZ_class_id(NPZ_gen):
                 img_fp = np.flip(img_fp, 1) if random.random() > 0.5 else img_fp
             if random_scale:
                 img_fp *= 1 - random_scale * random.random()
-            if True:
-                img_fp = resize(img_fp, [200, 200, 3], preserve_range=True)
+            # if True:
+            #     img_fp = resize(img_fp, [200, 200, 3], preserve_range=True)
 
             if random_resize:
                 new_size = int(new_size_scale * img_fp.shape[0])
@@ -377,7 +491,10 @@ class NPZ_bin_class(NPZ_gen):
 
 if __name__ == "__main__":
     i = 0
-    npz_2('../../val_set', resize=[200, 200])
+    # npz_2('../../val_set', resize=[200, 200])
+
+    mix_dataset('face_age_dataset')
+
     # GEn = NPZ_gen('./mtcnn_face_age', 10, 32, 1, dataset_size=95000)
 
     # print('Out side')
