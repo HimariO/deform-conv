@@ -222,3 +222,35 @@ def tf_batch_map_offsets(input, offsets, order=1):
 
     mapped_vals = tf_batch_map_coordinates(input, coords)
     return mapped_vals
+
+
+def add_batch_grid(input, offsets, order=1):
+    """Batch map offsets into input
+
+    Parameters
+    ---------
+    input : tf.Tensor. shape = (bc, s, s)
+    offsets: tf.Tensor. shape = (bc, s, s, 2)
+
+    Returns
+    -------
+    tf.Tensor. shape = (b, s, s, 2)
+    """
+
+    input_shape = tf.shape(input)
+    # batch_size = input_shape[0]
+    input_size = input_shape[1]
+
+    # offsets = tf.reshape(offsets, (batch_size, -1, 2))
+
+    grid = tf.meshgrid(
+        tf.range(input_size), tf.range(input_size), indexing='ij'
+    )
+
+    grid = tf.stack(grid, axis=-1)
+    grid = tf.cast(grid, 'float32')
+    grid = tf.expand_dims(grid, 0)
+
+    coords = offsets + grid
+    coords = tf.clip_by_value(coords, 0, tf.cast(input_size, 'float32') - 1)
+    return coords

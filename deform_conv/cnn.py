@@ -720,7 +720,7 @@ def get_large_res_deform_cnn2(class_num, trainable=False):
 
     # l = concatenate([l, l5])
 
-    l_offset = ConvOffset2D(384, name='conv33_offset', kernel_regularizer=OrthLocalReg2D)(l)
+    l_offset = ConvOffset2D(384, name='conv33_offset', kernel_regularizer=OrthLocalReg2D)(l, use_resam=True)
     l = Conv2D(512, (3, 3), padding='same', name='conv41', trainable=trainable, kernel_regularizer=OrthLocalReg2D)(l_offset)
     l = Activation('relu', name='conv41_relu')(l)
     l = BatchNormalization(name='conv41_bn')(l)
@@ -758,7 +758,7 @@ def get_large_res_deform_cnn2(class_num, trainable=False):
     l = Dense(768, name='fc1', trainable=trainable, kernel_regularizer=OrthLocalReg1D)(l)
     l = Activation('relu', name='fc1_relu')(l)
 
-    l = Dense(256, name='fc2', trainable=trainable)(l)
+    l = Dense(256, name='fc2', trainable=trainable, kernel_regularizer=OrthLocalReg1D)(l)
     l = Activation('relu', name='fc2_relu')(l)
 
     l = Dense(class_num, name='fc3', trainable=trainable)(l)

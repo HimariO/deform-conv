@@ -40,12 +40,15 @@ class_num = 6
 batch_size = 32 * GPU_NUM
 # batch_size = 160 * GPU_NUM #  65*65 img
 n_train = (88000 + 100000) * 1  # Currenly using 200*200 & mtcnn 65*65 dataset
-# n_test = batch_size * 10
+# n_train = batch_size * 10
 steps_per_epoch = int(np.ceil(n_train / batch_size))
 validation_steps = 4000 // batch_size
 
-# dataset = NPZ_gen('./mtcnn_face_age', class_num, batch_size, 1000, dataset_size=n_train)
-dataset = NPZ_gen('./face_age_dataset', class_num, batch_size, 1000, dataset_size=n_train)
+dataset = NPZ_gen(
+    './face_age_dataset', class_num, batch_size, 1000,
+    dataset_size=n_train, flip=True, random_scale=None, random_crop=0.2, random_resize=None
+)
+
 train_scaled_gen = dataset.get_some()
 test_scaled_gen = dataset.get_val(num_batch=validation_steps)
 
@@ -106,7 +109,7 @@ with tf.Session(config=config) as sess:
                     train_scaled_gen, steps_per_epoch=steps_per_epoch,
                     epochs=1000, verbose=1,
                     validation_data=test_scaled_gen, validation_steps=validation_steps,
-                    callbacks=[checkpoint, checkpoint_tl, spreadsheet], workers=5,
+                    callbacks=[checkpoint, checkpoint_tl, spreadsheet], workers=12, max_queue_size=36,
                 )
 
                 val_loss, val_acc = model.evaluate_generator(
@@ -118,21 +121,27 @@ with tf.Session(config=config) as sess:
                 model.save_weights('deform_cnn_inv_interrupt.h5')
         else:
             if True:
+                def crop_wrap(generator):
+                    for x, y in generator:
+                        new_x = []
+                        for img in x:
+                            h, w, c = img.shape
+                            new_img =  img[int(h * 0.1):int(h * 0.9), int(w * 0.1):int(w * 0.9), :]
+                            new_x.append(new_img)
+                        yield np.array(new_x), y
+
                 img_data = ImageDataGenerator()
                 img_gen = img_data.flow_from_directory(
                     args.img_dir,
                     target_size=[img_size, img_size],
                     batch_size=batch_size
                 )
-                # x,y = next(img_gen)
-                # print(x)
-                # input()
 
                 class_dir = [os.path.join(args.img_dir, d) for d in os.listdir(args.img_dir) if os.path.isdir(os.path.join(args.img_dir, d))]
                 img_files = [os.listdir(d) for d in class_dir]
 
                 val_loss, val_acc = model.evaluate_generator(
-                    img_gen, steps=sum(map(lambda x: len(x), img_files)) // batch_size
+                    crop_wrap(img_gen), steps=sum(map(lambda x: len(x), img_files)) // batch_size
                 )
 
                 print('val_loss:', val_loss)
@@ -150,12 +159,12 @@ with tf.Session(config=config) as sess:
 
                 c = 0
                 counter = {
-                0: 0,
-                1: 0,
-                2: 0,
-                3: 0,
-                4: 0,
-                5: 0,
+                    0: 0,
+                    1: 0,
+                    2: 0,
+                    3: 0,
+                    4: 0,
+                    5: 0,
                 }
 
                 # for img_p in img_dir:

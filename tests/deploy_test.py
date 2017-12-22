@@ -15,6 +15,7 @@ from dataset_gen import NPZ_gen
 parser = argparse.ArgumentParser()
 parser.add_argument("-g", "--gpu", help="gpu string")
 parser.add_argument("-w", "--weight", help=".pb model weight file.")
+# parser.add_argument("-hw", "--weight", help=".h5 model weight file.")
 parser.add_argument("-i", "--img_dir", help="feed imgs inside folder.")
 
 args = parser.parse_args()
@@ -45,7 +46,7 @@ test_scaled_gen = dataset.get_val(num_batch=validation_steps)
 
 config = tf.ConfigProto()
 config.gpu_options.allow_growth = True
-# config.gpu_options.per_process_gpu_memory_fraction = 0.3
+config.gpu_options.per_process_gpu_memory_fraction = 0.3
 
 with tf.Session(config=config) as sess:
     with tf.device(GPU):
@@ -115,10 +116,12 @@ with tf.Session(config=config) as sess:
             graph_def.ParseFromString(f.read())
 
             names = [n.name for n in graph_def.node]
-            # print('-' * 100)
-            # print(names)
-            # print('-' * 100)
-            x, y_pred = tf.import_graph_def(graph_def, return_elements=['input:0', 'y_pred:0'])
+            print('-' * 100)
+            print(names)
+            print('-' * 100)
+            print([n for n in names if 'y_pred' in n or 'out' in n])
+            print('-' * 100)
+            x, y_pred = tf.import_graph_def(graph_def, return_elements=['input:0', 'out/Softmax:0'])
 
         for i in range(0, len(inputs), batch_size):
             if i + batch_size > len(inputs):
@@ -128,6 +131,7 @@ with tf.Session(config=config) as sess:
 
             for o, n in zip(pred, range(len(pred))):
                 # print(o.shape)
+                print(o)
                 class_id = o.argmax()
                 pred_list.append(class_id)
                 pred_counter[class_id] += 1

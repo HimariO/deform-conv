@@ -39,7 +39,16 @@ def threadsafe_generator(f):
 
 
 class NPZ_gen:
-    def __init__(self, dataset_dir, class_num, batch_size, epoch, dataset_size=None, random_scale=None):
+    def __init__(self, dataset_dir, class_num, batch_size, epoch, dataset_size=None,
+                 soft_onehot=True, flip=True, random_scale=None, random_resize=None, random_crop=None):
+
+        self.data_preprocess = {
+            'soft_onehot': soft_onehot,
+            'flip': flip,
+            'random_scale': random_scale,
+            'random_resize': random_resize,
+            'random_crop': random_crop,
+        }
         # self.datas = [os.path.join(dataset_dir, f) for f in os.listdir(dataset_dir) if '.npz' in f or '.npy' in f]
         self.datas, self.val_datas = self._scan_dir(dataset_dir)
 
@@ -147,13 +156,15 @@ class NPZ_gen:
             self.output_img_num += npz_size
 
             # loop through datas inside npy file
-            for i in range(0, npz_size, self.batch_size):
-                if (i + self.batch_size) <= npz_size:
-                    B = self._process_data(npz, i, i + self.batch_size, keys, soft_onthot=True, flip=True, random_scale=None, random_resize=None, random_crop=0.1)
-                    X, Y = B[0], B[1]
-                    yield X, Y
-                else:
-                    break
+            num_cores = multiprocessing.cpu_count()
+            with Parallel(n_jobs=num_cores) as parallel:
+                for i in range(0, npz_size, self.batch_size):
+                    if (i + self.batch_size) <= npz_size:
+                        B = self._process_data(npz, i, i + self.batch_size, keys, parallel, **self.data_preprocess)
+                        X, Y = B[0], B[1]
+                        yield X, Y
+                    else:
+                        break
             del npz
 
         self.next_one = 'end'
@@ -177,15 +188,17 @@ class NPZ_gen:
         print('Validate on %s\'s: %s' % (self.val_datas[0], str(pick_group)))
         print('-' * 100)
 
-        for i in range(self.epoch * 2 * num_batch):
-            pick_start = pick_group[i % num_batch]
-            imgs, lab = self._process_data(npz, pick_start, pick_start + self.batch_size, keys, soft_onthot=False)
-            yield imgs, lab
+        num_cores = multiprocessing.cpu_count()
+        with Parallel(n_jobs=num_cores) as parallel:
+            for i in range(self.epoch * 2 * num_batch):
+                pick_start = pick_group[i % num_batch]
+                imgs, lab = self._process_data(npz, pick_start, pick_start + self.batch_size, keys, parallel, soft_onehot=False)
+                yield imgs, lab
 
     @staticmethod
     def _run(item, args):
 
-        soft_onthot = args['soft_onthot']
+        soft_onehot = args['soft_onehot']
         keras_model = args['keras_model']
         flip = args['flip']
         random_scale = args['random_scale']
@@ -195,6 +208,7 @@ class NPZ_gen:
         crop_top = args['crop_top']
         crop_left = args['crop_left']
         class_num = args['class_num']
+        new_size_scale = args['new_size_scale']
 
         tar_id = item['label']
         img_fp = item['img'] / 255. if not keras_model else item['img'].astype(np.float32)
@@ -202,9 +216,14 @@ class NPZ_gen:
         if flip:
             img_fp = np.flip(img_fp, 1) if random.random() > 0.5 else img_fp
         if random_scale:
-            img_fp *= 1 - random_scale * random.random()
+            for channel in range(img_fp.shape[2]):
+                img_fp[:, :, channel] *= 1 - (random_scale * random.random() - random_scale / 2)
         # if True:
         #     img_fp = resize(img_fp, [200, 200, 3], preserve_range=True)
+        if random_resize:
+            new_size = int(new_size_scale * img_fp.shape[0])
+            img_fp = resize(img_fp, [new_size, new_size, 3], preserve_range=True)
+
         if random_crop:
             h, w, c = img_fp.shape
             crop_size_ = [int(h*f) for f in crop_size]
@@ -212,14 +231,10 @@ class NPZ_gen:
             img_fp = img_fp[crop_size_[0]:, :, :] if crop_top else img_fp[:h - crop_size_[0], :, :]
             img_fp = img_fp[:, crop_size_[1]:, :] if crop_left else img_fp[:, :w - crop_size_[1], :]
 
-        if random_resize:
-            new_size = int(new_size_scale * img_fp.shape[0])
-            img_fp = resize(img_fp, [new_size, new_size, 3], preserve_range=True)
-
         img_onehot = np.zeros([class_num])
 
         # img_onehot[tar_id] = 1  # int
-        if soft_onthot:
+        if soft_onehot:
             delta1 = (random.random() - 0.5) * 2 * 0.1 if False else 0
             delta2 = (random.random() - 0.5) * 2 * 0.1 if False else 0
 
@@ -238,7 +253,7 @@ class NPZ_gen:
 
         return img_fp, img_onehot
 
-    def _process_data(self, npz, range_a, range_b, keys, flip=False, soft_onthot=True, keras_model=True, random_scale=None, random_resize=None, random_crop=None):
+    def _process_data(self, npz, range_a, range_b, keys, parallel, flip=False, soft_onehot=True, keras_model=True, random_scale=None, random_resize=None, random_crop=None):
         # keys = list(npz.keys())
         input_vec = []
         output_vec = []
@@ -246,6 +261,7 @@ class NPZ_gen:
         crop_size = []
         crop_top = random.random() < 0.5
         crop_left = random.random() < 0.5
+        new_size_scale = 1
 
         if random_resize:
             if random.random() < 0.333:
@@ -255,11 +271,11 @@ class NPZ_gen:
             # elif random.random() > 0.333 and random.random() < 0.666:
             #     new_size_scale = 1 + random_resize * random.random() / 2
         if random_crop:
-            crop_size = [random_crop * (1 - random.random() * 0.5)] * 2
+            crop_size = [random_crop * random.random()] * 2
 
         args = {
             'flip': flip,
-            'soft_onthot': soft_onthot,
+            'soft_onehot': soft_onehot,
             'keras_model': keras_model,
             'random_scale': random_scale,
             'random_resize': random_resize,
@@ -268,10 +284,11 @@ class NPZ_gen:
             'crop_top': crop_top,
             'crop_left': crop_left,
             'class_num': self.class_num,
+            'new_size_scale': new_size_scale,
         }
 
         num_cores = multiprocessing.cpu_count()
-        results = Parallel(n_jobs=num_cores)(delayed(self._run)(npz[img_name], args) for img_name in keys[range_a: range_b])
+        results = parallel(delayed(self._run)(npz[img_name], args) for img_name in keys[range_a: range_b])
 
         for r in results:
             input_vec.append(r[0])

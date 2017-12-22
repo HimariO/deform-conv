@@ -7,7 +7,7 @@ import keras.backend as K
 from keras.layers import Conv2D
 from keras.engine.topology import Layer
 from keras.initializers import RandomNormal
-from deform_conv.deform_conv import tf_batch_map_offsets
+from deform_conv.deform_conv import tf_batch_map_offsets, add_batch_grid
 
 
 class ConvOffset2D(Conv2D):
@@ -40,7 +40,7 @@ class ConvOffset2D(Conv2D):
             **kwargs
         )
 
-    def call(self, x):
+    def call(self, x, use_resam=False):
         """
         Return the deformed featured map
         x: (b, h, w, f) output of other conv layer.
@@ -51,13 +51,26 @@ class ConvOffset2D(Conv2D):
         offsets = super(ConvOffset2D, self).call(x)
 
         # offsets: (b*c, h, w, 2)
-        offsets = self._to_bc_h_w_2(offsets, x_shape)
 
         # x: (b*c, h, w)
-        x = self._to_bc_h_w(x, x_shape)
 
-        # X_offset: (b*c, h, w)
-        x_offset = tf_batch_map_offsets(x, offsets)
+        x = self._to_bc_h_w(x, x_shape)
+        offsets = self._to_bc_h_w_2(offsets, x_shape)
+
+        if hasattr(tf.contrib, 'resampler') and use_resam:
+            offsets = add_batch_grid(x, offsets)
+
+            x = tf.einsum('ijk->ikj', x)
+            x = tf.expand_dims(x, axis=-1)
+            # return offsets
+
+            # x_offset: (bc, h, w, 1)
+            x_offset = tf.contrib.resampler.resampler(x, offsets)
+            # x_offset: (bc, h, w)
+            x_offset = tf.squeeze(x_offset)
+        else:
+            # x_offset: (bc, hw)
+            x_offset = tf_batch_map_offsets(x, offsets)
 
         # x_offset: (b, h, w, c)
         x_offset = self._to_b_h_w_c(x_offset, x_shape)

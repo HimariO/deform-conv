@@ -44,9 +44,6 @@ def make_parallel(model, gpu_count):
                     slice_n = Lambda(get_slice, output_shape=input_shape, arguments={'idx':i,'parts':gpu_count})(x)
                     inputs.append(slice_n)
                 outputs = model(inputs)
-                print('-' * 100)
-                print(inputs)
-                print(outputs)
 
                 if not isinstance(outputs, list):
                     outputs = [outputs]
@@ -54,8 +51,6 @@ def make_parallel(model, gpu_count):
                 for l in range(len(outputs)):
                     outputs_all[l].append(outputs[l])
 
-    print('-' * 100)
-    print(outputs_all)
     # merge outputs on CPU
     with tf.device('/cpu:0'):
         merged = []

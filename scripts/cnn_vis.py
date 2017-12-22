@@ -1,5 +1,7 @@
 from __future__ import division
 # %env CUDA_VISIBLE_DEVICES=0
+import matplotlib
+matplotlib.use('Agg')
 
 import argparse
 import os
@@ -16,7 +18,7 @@ from keras.callbacks import ModelCheckpoint
 from keras.preprocessing.image import ImageDataGenerator
 
 from deform_conv.callbacks import TensorBoard, SpreadSheet
-from deform_conv.cnn_vis import *
+from deform_conv.cnn import *
 from deform_conv.utils import make_parallel
 from deform_conv.layers import *
 
@@ -27,8 +29,6 @@ from PIL import Image
 from vis.visualization import visualize_saliency, overlay
 from vis.utils import utils
 from keras import activations
-import matplotlib
-matplotlib.use('agg')
 import matplotlib.pyplot as plt
 
 
@@ -38,7 +38,8 @@ parser.add_argument("-i", "--img_dir", help=".h5 model weight file.")
 args = parser.parse_args()
 class_num = 6
 # Build the VGG16 network with ImageNet weights
-inputs, outputs = get_large_deform_cnn(class_num, trainable=False)
+inputs, outputs = get_large_res_deform_cnn2(class_num, trainable=False)
+# inputs, outputs = get_large_deform_cnn(class_num, trainable=False)
 model = Model(inputs=inputs, outputs=outputs)
 model.load_weights(args.weight)
 # model = load_model(args.weight, custom_objects={'InvConv2D': InvConv2D})

@@ -11,7 +11,7 @@ import keras.backend as K
 from keras.models import Model
 from keras.models import load_model
 
-from deform_conv.cnn_vis import *
+from deform_conv.cnn import *
 from deform_conv.layers import *
 from deform_conv.utils import make_parallel
 
@@ -24,7 +24,7 @@ args = parser.parse_args()
 class_num = int(args.class_num) if args.class_num is not None else 6
 
 K.set_learning_phase(0)
-inputs, outputs = get_large_deform_cnn(class_num, trainable=True, to_TF=True)
+inputs, outputs = get_large_res_deform_cnn2(class_num, trainable=True)
 # inputs, outputs = get_large_deform_cnn(class_num, trainable=True)
 model = Model(inputs=inputs, outputs=outputs)
 
@@ -54,11 +54,6 @@ print(model.outputs)
 
 new_inputs = []
 new_outputs = []
-# if len(model.inputs) > 1:
-#     for i, n in zip(model.inputs, range(len(model.inputs))):
-#         new_inputs.append(tf.identity(i, 'x%d' % n))
-# else:
-#     new_inputs.append(tf.identity(model.inputs[0], 'x'))
 
 if len(model.outputs) > 1:
     for i, n in zip(model.outputs, range(len(model.outputs))):
@@ -69,11 +64,11 @@ else:
     new_outputs.append('y_pred')
 
 # print(colored('[model.inputs]', color='green'))
+sess = K.get_session()
 # print(new_inputs)
 print(colored('[new model.outputs]', color='green'))
 print(new_outputs)
 
-sess = K.get_session()
 
 names = [n.name for n in sess.graph.as_graph_def().node]
 t_names = [n.name for n in sess.graph.as_graph_def().node if 'tower' in n.name]
