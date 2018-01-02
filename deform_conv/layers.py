@@ -4,7 +4,7 @@ from __future__ import absolute_import, division
 import tensorflow as tf
 import keras.backend as K
 
-from keras.layers import Conv2D
+from keras.layers import Conv2D, SeparableConv2D
 from keras.engine.topology import Layer
 from keras.initializers import RandomNormal
 from deform_conv.deform_conv import tf_batch_map_offsets, add_batch_grid
@@ -106,6 +106,37 @@ class ConvOffset2D(Conv2D):
         )
         x = tf.transpose(x, [0, 2, 3, 1])
         return x
+
+
+class SepConvOffset2D(ConvOffset2D, SeparableConv2D):
+    """ConvOffset2D
+
+    Convolutional layer responsible for learning the 2D offsets and output the
+    deformed feature map using bilinear interpolation
+
+    Note that this layer does not perform convolution on the deformed feature
+    map. See get_deform_cnn in cnn.py for usage
+    """
+
+    def __init__(self, filters, init_normal_stddev=0.01, **kwargs):
+        """Init
+
+        Parameters
+        ----------
+        filters : int
+            Number of channel of the input feature map
+        init_normal_stddev : float
+            Normal kernel initialization
+        **kwargs:
+            Pass to superclass. See Con2D layer in Keras
+        """
+
+        self.filters = filters
+        super(ConvOffset2D, self).__init__(
+            self.filters * 2, (3, 3), padding='same', use_bias=False,
+            kernel_initializer=RandomNormal(0, init_normal_stddev),
+            **kwargs
+        )
 
 
 class InvConv2D(Conv2D):
@@ -255,16 +286,111 @@ class ImageNorm(Layer):
         for i in range(3):
           adjusted_stddev = tf.expand_dims(adjusted_stddev, axis=1)
 
-        # print('-'*100)
-        # print('x: ', x)
-        # print('var: ', var)
-        # print('num_element_per_img: ', num_element_per_img)
-        # print('adjusted_stddev: ', adjusted_stddev)
-        # print('-'*100)
         return (x - mean) / adjusted_stddev
 
     def compute_output_shape(self, input_shape):
         return input_shape
+
+
+class CapsuleRouting(Layer):
+
+    def __init__(self, input_capsule, output_capsule, input_size, output_size, reduce_max=False, reduce_avg=False, reshape_cnn=False, **kwargs):
+        self.input_capsule = input_capsule
+        self.output_capsule = output_capsule
+        self.input_size = input_size
+        self.output_size = output_size
+
+        assert (reduce_avg and reduce_max and reshape_cnn) == False
+        self.reduce_max = reduce_max
+        self.reduce_avg = reduce_avg
+        self.reshape_cnn = reshape_cnn
+
+        super(CapsuleRouting, self).__init__(**kwargs)
+
+    def build(self, input_shape):
+        # Create a trainable weight variable for this layer.
+        self.route = self._weight_variable(
+            [self.output_capsule, self.input_capsule],
+            input_n=self.input_capsule,
+            output_n=self.output_capsule,
+            regularizer=OrthLocalReg1D,
+            name='W_route'
+        )
+
+        self.reduce_dim = self._weight_variable(
+            [self.output_capsule, self.input_size, self.output_size],
+            name='W_redim'
+        )
+
+        # self.FT_F = self._weight_variable(
+        #     [self.output_capsule, self.input_size, self.input_size],
+        #     name='W_FT_F'
+        # )
+        super(CapsuleRouting, self).build(input_shape)  # Be sure to call this somewhere!
+
+    def call(self, x):
+
+        x = self._reshape(x)
+        output = self._capsule_net(x, self.input_capsule, self.output_capsule, self.input_size, self.output_size)
+        
+        if self.reduce_max:
+            output = tf.reduce_max(output, axis=2)
+        elif self.reduce_avg:
+            output = tf.reduce_mean(output, axis=2)
+        elif self.reshape_cnn:
+            fmap_size = int(self.output_size**0.5)
+            output = tf.transpose(output, perm=[0, 2, 1])
+            output = tf.reshape(output, [-1, fmap_size, fmap_size, self.output_capsule])
+        return output
+
+    def _reshape(self, x):
+        if len(x.get_shape().as_list()) == 4:
+            # rerange dims if input if CNN feature map
+            x = tf.transpose(x, perm=[0, 3, 1, 2])
+        return tf.reshape(x, [-1, self.input_capsule, self.input_size])
+
+    def _weight_variable(self, shape, input_n=0, output_n=0, baise=0, trainable=True, regularizer=None, name='W'):
+        weights = self.add_weight(
+            name=name,
+            shape=shape,
+            initializer='uniform',
+            trainable=trainable,
+            regularizer=regularizer,
+        )
+        return weights
+
+    def _capsule_net(self, capsules, input_capsule, output_capsule, input_size, output_size):
+        # _route =  tf.clip_by_value(self.route, 0.0, 1.0)
+        _route = self.route
+        translate_r = tf.einsum('ij,ajb->aib', _route, capsules)
+
+        capsules_ = tf.reshape(translate_r, [-1, output_capsule, 1, input_size])
+
+        xW = tf.reshape(
+            tf.einsum('bjk,abcj->abck', self.reduce_dim, capsules_),
+            [-1, output_capsule, output_size]
+        ) # [-1,b,output_size]
+
+        # capsules_t = tf.transpose(capsules_, perm=[0,1,3,2])
+        # xT_FT_F_x_ = tf.einsum('abjk,abcj->abck', capsules_t, tf.einsum('bjk,abcj->abck', self.FT_F, capsules_))
+
+        # xT_FT_F_x = tf.reshape(xT_FT_F_x_, [-1, output_capsule, 1])
+        # translate = xW + xT_FT_F_x
+        translate = xW
+
+        return tf.nn.relu(translate)
+
+    def compute_output_shape(self, input_shape):
+        # print('compute_output_shape:input_shape', input_shape)
+        if input_shape is None: # when using reduce_max
+            return input_shape
+        elif self.reduce_max or self.reduce_avg:
+            return (input_shape[0], self.output_capsule)
+        elif self.reshape_cnn:
+            fmap_size = int(self.output_size**0.5)
+            return (input_shape[0], fmap_size, fmap_size, self.output_capsule)
+        else:
+            return (input_shape[0], self.output_capsule, self.output_size)
 
 
 def OrthLocalReg2D(W, L=10., ratio=1e-2):
@@ -291,7 +417,7 @@ def OrthLocalReg2D(W, L=10., ratio=1e-2):
     return cost * ratio
 
 
-def OrthLocalRegSep2D(W, L=10., ratio=2e-4):
+def OrthLocalRegSep2D(W, L=10., ratio=5e-4):
     """
     Local orthognal reguliation for "2D Separable CNN filter"
     W: (height, width, input_channel, depth_multiplier)
@@ -322,7 +448,7 @@ def OrthLocalRegSep2D(W, L=10., ratio=2e-4):
     return cost * ratio
 
 
-def OrthLocalReg1D(W, L=10., ratio=1e-3):
+def OrthLocalReg1D(W, L=10., ratio=5e-3):
     """
     Local orthognal reguliation for 1D FC weight
     W: (input_size, output_size) weight matrix of 1 layer fc-layer.

@@ -39,39 +39,19 @@ img_size = 200
 class_num = 6
 batch_size = 32 * GPU_NUM
 # batch_size = 160 * GPU_NUM #  65*65 img
-n_train = (88000 + 100000) * 1  # Currenly using 200*200 & mtcnn 65*65 dataset
+n_train = (88000 + 0) * 1  # Currenly using 200*200 & mtcnn 65*65 dataset
 # n_train = batch_size * 10
 steps_per_epoch = int(np.ceil(n_train / batch_size))
 validation_steps = 4000 // batch_size
 
 dataset = NPZ_gen(
     './face_age_dataset', class_num, batch_size, 1000,
-    dataset_size=n_train, flip=True, random_scale=None, random_crop=0.2, random_resize=None
+    dataset_size=n_train, flip=True, hierarchy_onehot=True,
+    random_scale=None, random_crop=0.25, random_resize=None, random_noise=0.05
 )
 
 train_scaled_gen = dataset.get_some()
 test_scaled_gen = dataset.get_val(num_batch=validation_steps)
-
-# data_gen_args = dict(featurewise_center=False,
-#                      featurewise_std_normalization=False,
-#                      horizontal_flip=True,
-#                      width_shift_range=0.1,
-#                      height_shift_range=0.1,
-#                      zoom_range=0.1)
-#
-# train_dataset = ImageDataGenerator(**data_gen_args)
-# train_scaled_gen = train_dataset.flow_from_directory(
-#     './mtcnn_face_age',
-#     target_size=[img_size, img_size],
-#     batch_size=batch_size
-# )
-#
-# val_dataset = ImageDataGenerator()
-# test_scaled_gen = val_dataset.flow_from_directory(
-#     './mtcnn_face_age_val',
-#     target_size=[img_size, img_size],
-#     batch_size=batch_size
-# )
 
 config = tf.ConfigProto()
 config.gpu_options.allow_growth = True
@@ -98,8 +78,8 @@ with tf.Session(config=config) as sess:
         loss = categorical_crossentropy
         # model._weights('../models/deform_cnn.h5')
 
-        model.compile(optim, loss, metrics=['accuracy'])
-        checkpoint = ModelCheckpoint("deform_cnn_inv_best.h5", monitor='val_acc', save_best_only=True)
+        model.compile(optim, [loss, loss], metrics=['accuracy'])
+        checkpoint = ModelCheckpoint("deform_cnn_inv_best.h5", monitor='concatenate_3_acc', save_best_only=True)
         checkpoint_tl = ModelCheckpoint("deform_cnn_inv_trainbest.h5", monitor='loss', save_best_only=True)
         spreadsheet = SpreadSheet("1nu6AFqzeYc2rNFAjtUtem-CFYKiRI4HCmXkxWsGglRg", "DeformFaceAgeML3")
 

@@ -6,6 +6,7 @@ import tensorflow as tf
 from keras.callbacks import Callback
 import keras.backend as K
 import os
+import numpy as np
 
 class TensorBoard(Callback):
 	"""Tensorboard basic visualizations"""
@@ -122,4 +123,36 @@ class SpreadSheet(Callback):
 		return
 
 	def on_batch_end(self, batch, logs={}):
+		return
+
+
+class NpyCheckPoint(Callback):
+	def __init__(self, model, file_name, monitor='val_acc'):
+		super(NpyCheckPoint, self).__init__()
+		self.file_name = file_name
+		self.monitor = monitor
+		self.model = model
+
+		self.old_logs = { monitor: 0 }
+
+	def _save_weight(self):
+		# W = self.model.get_weights()
+		# np.save(W, self.file_name)
+		self.model.save_weights(self.file_name)
+
+	def on_epoch_end(self, epoch, logs={}):
+		value = logs.get(self.monitor)
+		old_value = self.old_logs[self.monitor]
+
+		if 'acc' in self.monitor:
+			if value > old_value:
+				self.old_logs[self.monitor] = old_value
+				self._save_weight()
+		elif 'loss' in self.monitor:
+			if value < old_value:
+				self.old_logs[self.monitor] = old_value
+				self._save_weight()
+		else:
+			self._save_weight()
+
 		return

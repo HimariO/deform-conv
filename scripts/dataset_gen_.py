@@ -10,6 +10,7 @@ import sys
 from queue import Queue
 from PIL import Image
 from skimage.transform import resize
+from skimage import util
 from termcolor import colored
 from joblib import Parallel, delayed
 import multiprocessing
@@ -40,7 +41,12 @@ def threadsafe_generator(f):
 
 class NPZ_gen:
     def __init__(self, dataset_dir, class_num, batch_size, epoch, dataset_size=None,
-                 soft_onehot=True, flip=True, random_scale=None, random_resize=None, random_crop=None):
+                 soft_onehot=True, hierarchy_onehot=False, flip=True, random_scale=None, random_resize=None, random_crop=None, random_noise=None):
+
+        # assert random_scale < .5 and random_scale > .0
+        # assert random_resize < .5 and random_scale > .0
+        # assert random_crop < .4 and random_crop > .0
+        # assert random_noise < .05 and random_noise > .001
 
         self.data_preprocess = {
             'soft_onehot': soft_onehot,
@@ -48,6 +54,8 @@ class NPZ_gen:
             'random_scale': random_scale,
             'random_resize': random_resize,
             'random_crop': random_crop,
+            'random_noise': random_noise,
+            'hierarchy_onehot': hierarchy_onehot,
         }
         # self.datas = [os.path.join(dataset_dir, f) for f in os.listdir(dataset_dir) if '.npz' in f or '.npy' in f]
         self.datas, self.val_datas = self._scan_dir(dataset_dir)
@@ -192,8 +200,25 @@ class NPZ_gen:
         with Parallel(n_jobs=num_cores) as parallel:
             for i in range(self.epoch * 2 * num_batch):
                 pick_start = pick_group[i % num_batch]
-                imgs, lab = self._process_data(npz, pick_start, pick_start + self.batch_size, keys, parallel, soft_onehot=False)
+                imgs, lab = self._process_data(
+                    npz, pick_start, pick_start + self.batch_size, keys, parallel,
+                    soft_onehot=False, hierarchy_onehot=self.data_preprocess['hierarchy_onehot']
+                )
                 yield imgs, lab
+
+    @staticmethod
+    def _hierarchy_onehot(onehot, target_id, class_num):
+        split = class_num // 2
+        super_class = -1
+
+        if target_id < split:
+            super_class = 0
+        else:
+            super_class = 1
+
+        super_class_onehot = np.zeros([2])
+        super_class_onehot[super_class] = 1.
+        return super_class_onehot
 
     @staticmethod
     def _run(item, args):
@@ -204,11 +229,13 @@ class NPZ_gen:
         random_scale = args['random_scale']
         random_crop = args['random_crop']
         random_resize = args['random_resize']
+        random_noise = args['random_noise']
         crop_size = args['crop_size']
         crop_top = args['crop_top']
         crop_left = args['crop_left']
         class_num = args['class_num']
         new_size_scale = args['new_size_scale']
+        hierarchy_onehot = args['hierarchy_onehot']
 
         tar_id = item['label']
         img_fp = item['img'] / 255. if not keras_model else item['img'].astype(np.float32)
@@ -218,8 +245,8 @@ class NPZ_gen:
         if random_scale:
             for channel in range(img_fp.shape[2]):
                 img_fp[:, :, channel] *= 1 - (random_scale * random.random() - random_scale / 2)
-        # if True:
-        #     img_fp = resize(img_fp, [200, 200, 3], preserve_range=True)
+            img_fp = img_fp.clip(min=0., max=255.) if keras_model else img_fp.clip(min=0., max=1.)
+
         if random_resize:
             new_size = int(new_size_scale * img_fp.shape[0])
             img_fp = resize(img_fp, [new_size, new_size, 3], preserve_range=True)
@@ -230,6 +257,12 @@ class NPZ_gen:
 
             img_fp = img_fp[crop_size_[0]:, :, :] if crop_top else img_fp[:h - crop_size_[0], :, :]
             img_fp = img_fp[:, crop_size_[1]:, :] if crop_left else img_fp[:, :w - crop_size_[1], :]
+
+        if random_noise:
+            if random.random()  > 0.33:
+                img_fp = img_fp / 255. if keras_model else img_fp
+                img_fp = util.random_noise(img_fp, var=random_noise)
+                img_fp = img_fp * 255. if keras_model else img_fp
 
         img_onehot = np.zeros([class_num])
 
@@ -251,9 +284,14 @@ class NPZ_gen:
         else:
             img_onehot[tar_id] = 1
 
+        if hierarchy_onehot:
+            super_onehot = NPZ_gen._hierarchy_onehot(img_onehot, tar_id, class_num)
+            img_onehot = [img_onehot, super_onehot]
+
         return img_fp, img_onehot
 
-    def _process_data(self, npz, range_a, range_b, keys, parallel, flip=False, soft_onehot=True, keras_model=True, random_scale=None, random_resize=None, random_crop=None):
+    def _process_data(self, npz, range_a, range_b, keys, parallel, flip=False, soft_onehot=True, hierarchy_onehot=False, keras_model=True,
+                      random_scale=None, random_resize=None, random_crop=None, random_noise=None):
         # keys = list(npz.keys())
         input_vec = []
         output_vec = []
@@ -276,9 +314,11 @@ class NPZ_gen:
         args = {
             'flip': flip,
             'soft_onehot': soft_onehot,
+            'hierarchy_onehot': hierarchy_onehot,
             'keras_model': keras_model,
             'random_scale': random_scale,
             'random_resize': random_resize,
+            'random_noise': random_noise,
             'random_crop': random_crop,
             'crop_size': crop_size,
             'crop_top': crop_top,
@@ -289,12 +329,21 @@ class NPZ_gen:
 
         num_cores = multiprocessing.cpu_count()
         results = parallel(delayed(self._run)(npz[img_name], args) for img_name in keys[range_a: range_b])
+        multi_output_vec = [[], []]
 
         for r in results:
             input_vec.append(r[0])
-            output_vec.append(r[1])
+            if type(r[1]) is list:
+                multi_output_vec[0].append(r[1][0])
+                multi_output_vec[1].append(r[1][1])
+                # output_vec.append(r[1])
+            else:
+                output_vec.append(r[1])
 
-        return np.array(input_vec), np.array(output_vec)
+        if len(output_vec) == 0: # multi target
+            return np.array(input_vec), [np.array(multi_output_vec[0]), np.array(multi_output_vec[1])]
+        else:
+            return np.array(input_vec), np.array(output_vec)
 
 if __name__ == "__main__":
     i = 0
@@ -302,7 +351,7 @@ if __name__ == "__main__":
 
     # mix_dataset('face_age_dataset')
 
-    GEn = NPZ_gen('./face_age_dataset', 6, 32, 100, dataset_size=95000)
+    GEn = NPZ_gen('./face_age_dataset', 6, 32, 100, hierarchy_onehot=True, dataset_size=95000, random_noise=0.02)
 
     print('Out side')
     GEn.get_val()

@@ -6,6 +6,28 @@ from keras.layers import Lambda
 from keras.layers.merge import concatenate
 from keras.models import load_model, Model
 import tensorflow as tf
+import numpy as np
+
+
+def model_save_wrapper(model):
+    def load_(file_name, **kwarg):
+        if '.np' in file_name:
+            model.set_weights(np.load(file_name)['weights'])
+        else:
+            model.load_weights(file_name, **kwarg)
+
+    def save_(file_name, **kwarg):
+        if '.np' in file_name:
+            W = model.get_weights()
+            np.savez(file_name, weights=W)
+        else:
+            name_only = file_name.replace('.npy', '')
+            name_only = name_only.replace('.npz', '')
+            model.save_weights(name_only, **kwarg)
+
+    model.load_weights = load_
+    model.save_weights = save_
+    return model
 
 
 def keras_set_tf_debug():
@@ -32,7 +54,7 @@ def make_parallel(model, gpu_count):
         outputs_all.append([])
 
     #Place a copy of the model on each GPU, each getting a slice of the batch
-    
+
     for i in range(gpu_count):
         with tf.device('/gpu:%d' % i):
             with tf.name_scope('tower_%d' % i) as scope:
