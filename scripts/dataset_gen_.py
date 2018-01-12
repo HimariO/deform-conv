@@ -11,6 +11,8 @@ from queue import Queue
 from PIL import Image
 from skimage.transform import resize
 from skimage import util
+from skimage import filters
+from skimage import exposure
 from termcolor import colored
 from joblib import Parallel, delayed
 import multiprocessing
@@ -41,7 +43,8 @@ def threadsafe_generator(f):
 
 class NPZ_gen:
     def __init__(self, dataset_dir, class_num, batch_size, epoch, dataset_size=None,
-                 soft_onehot=True, hierarchy_onehot=False, flip=True, random_scale=None, random_resize=None, random_crop=None, random_noise=None):
+                 soft_onehot=True, hierarchy_onehot=False, gate=False, flip=True,
+                 random_scale=None, random_resize=None, random_crop=None, random_noise=None, random_blur=False, random_gamma=None):
 
         # assert random_scale < .5 and random_scale > .0
         # assert random_resize < .5 and random_scale > .0
@@ -55,7 +58,10 @@ class NPZ_gen:
             'random_resize': random_resize,
             'random_crop': random_crop,
             'random_noise': random_noise,
+            'random_blur': random_blur,
+            'random_gamma': random_gamma,
             'hierarchy_onehot': hierarchy_onehot,
+            'gate': gate,
         }
         # self.datas = [os.path.join(dataset_dir, f) for f in os.listdir(dataset_dir) if '.npz' in f or '.npy' in f]
         self.datas, self.val_datas = self._scan_dir(dataset_dir)
@@ -202,7 +208,9 @@ class NPZ_gen:
                 pick_start = pick_group[i % num_batch]
                 imgs, lab = self._process_data(
                     npz, pick_start, pick_start + self.batch_size, keys, parallel,
-                    soft_onehot=False, hierarchy_onehot=self.data_preprocess['hierarchy_onehot']
+                    soft_onehot=self.data_preprocess['soft_onehot'],
+                    hierarchy_onehot=self.data_preprocess['hierarchy_onehot'],
+                    gate=self.data_preprocess['gate'],
                 )
                 yield imgs, lab
 
@@ -223,29 +231,37 @@ class NPZ_gen:
     @staticmethod
     def _run(item, args):
 
-        soft_onehot = args['soft_onehot']
         keras_model = args['keras_model']
         flip = args['flip']
+
         random_scale = args['random_scale']
         random_crop = args['random_crop']
         random_resize = args['random_resize']
         random_noise = args['random_noise']
+        random_blur = args['random_blur']
+        random_gamma = args['random_gamma']
+
         crop_size = args['crop_size']
         crop_top = args['crop_top']
         crop_left = args['crop_left']
+
         class_num = args['class_num']
-        new_size_scale = args['new_size_scale']
+        soft_onehot = args['soft_onehot']
         hierarchy_onehot = args['hierarchy_onehot']
+        gate = args['gate']
+        new_size_scale = args['new_size_scale']
 
         tar_id = item['label']
         img_fp = item['img'] / 255. if not keras_model else item['img'].astype(np.float32)
+        blur_level = int(10 * random.random()) if random_blur else 0
 
         if flip:
             img_fp = np.flip(img_fp, 1) if random.random() > 0.5 else img_fp
+            # img_fp = np.flip(img_fp, 0) if random.random() > 0.5 else img_fp
         if random_scale:
             for channel in range(img_fp.shape[2]):
                 img_fp[:, :, channel] *= 1 - (random_scale * random.random() - random_scale / 2)
-            img_fp = img_fp.clip(min=0., max=255.) if keras_model else img_fp.clip(min=0., max=1.)
+            img_fp = img_fp.clip(min=0, max=255) if keras_model else img_fp.clip(min=0, max=1)
 
         if random_resize:
             new_size = int(new_size_scale * img_fp.shape[0])
@@ -258,40 +274,70 @@ class NPZ_gen:
             img_fp = img_fp[crop_size_[0]:, :, :] if crop_top else img_fp[:h - crop_size_[0], :, :]
             img_fp = img_fp[:, crop_size_[1]:, :] if crop_left else img_fp[:, :w - crop_size_[1], :]
 
-        if random_noise:
-            if random.random()  > 0.33:
-                img_fp = img_fp / 255. if keras_model else img_fp
-                img_fp = util.random_noise(img_fp, var=random_noise)
-                img_fp = img_fp * 255. if keras_model else img_fp
+        if random_gamma:
+            if random.random() > 0.5:
+                gamma_delta = random_gamma * (random.random() - 0.5)
+                img_fp = exposure.adjust_gamma(img_fp, 1 + gamma_delta)
+                img_fp = img_fp.clip(min=0, max=255) if keras_model else img_fp.clip(min=0, max=1)
+
+        if random_noise and random.random()  > 0.33:
+            img_fp = img_fp / 255. if keras_model else img_fp
+            img_fp = util.random_noise(img_fp, var=random_noise)
+            img_fp = img_fp * 255. if keras_model else img_fp
+            img_fp = img_fp.clip(min=0, max=255) if keras_model else img_fp.clip(min=0, max=1)
+
+        if random_blur and random.random()  > 0.5:
+            img_fp = img_fp / 255. if keras_model else img_fp
+            img_fp = filters.gaussian(img_fp, sigma=blur_level, multichannel=True)
+            img_fp = img_fp * 255. if keras_model else img_fp
+            img_fp = img_fp.clip(min=0, max=255) if keras_model else img_fp.clip(min=0, max=1)
 
         img_onehot = np.zeros([class_num])
 
         # img_onehot[tar_id] = 1  # int
-        if soft_onehot:
-            delta1 = (random.random() - 0.5) * 2 * 0.1 if False else 0
-            delta2 = (random.random() - 0.5) * 2 * 0.1 if False else 0
+        """
+        onehot
+        """
+        if tar_id > 0 and tar_id < class_num:
+            if soft_onehot:
+                delta1 = (random.random() - 0.5) * 2 * 0.1 if False else 0
+                delta2 = (random.random() - 0.5) * 2 * 0.1 if False else 0
 
-            if tar_id != 0 and tar_id != class_num - 1:
-                img_onehot[tar_id] = 0.8 + delta1 + delta2  # int
-                img_onehot[tar_id - 1] = 0.1 + delta1
-                img_onehot[tar_id + 1] = 0.1 + delta2
-            else:
-                img_onehot[tar_id] = 0.9 + delta1 # int
-                if tar_id == 0:
-                    img_onehot[tar_id + 1] = 0.1 + delta1
-                else:
+                if tar_id != 0 and tar_id != class_num - 1:
+                    img_onehot[tar_id] = 0.8 + delta1 + delta2  # int
                     img_onehot[tar_id - 1] = 0.1 + delta1
-        else:
-            img_onehot[tar_id] = 1
+                    img_onehot[tar_id + 1] = 0.1 + delta2
+                else:
+                    img_onehot[tar_id] = 0.9 + delta1 # int
+                    if tar_id == 0:
+                        img_onehot[tar_id + 1] = 0.1 + delta1
+                    else:
+                        img_onehot[tar_id - 1] = 0.1 + delta1
+            else:
+                img_onehot[tar_id] = class_num
+        else:  # unclassifiable sample
+            if gate:
+                img_onehot[:] = 1. / class_num
+            else:
+                img_onehot[-1] = 1.
 
+        """
+        Additional labels
+        """
         if hierarchy_onehot:
             super_onehot = NPZ_gen._hierarchy_onehot(img_onehot, tar_id, class_num)
             img_onehot = [img_onehot, super_onehot]
+        elif gate:
+            if tar_id > 0 and tar_id < class_num:
+                img_onehot = [img_onehot, np.ones([1])]
+            else:
+                blur_level_ = (10 - blur_level) / 10
+                img_onehot = [img_onehot, np.array([blur_level_])]
 
         return img_fp, img_onehot
 
-    def _process_data(self, npz, range_a, range_b, keys, parallel, flip=False, soft_onehot=True, hierarchy_onehot=False, keras_model=True,
-                      random_scale=None, random_resize=None, random_crop=None, random_noise=None):
+    def _process_data(self, npz, range_a, range_b, keys, parallel, flip=False, soft_onehot=True, hierarchy_onehot=False, gate=False,
+                      keras_model=True, random_scale=None, random_resize=None, random_crop=None, random_noise=None, random_blur=False, random_gamma=False):
         # keys = list(npz.keys())
         input_vec = []
         output_vec = []
@@ -315,11 +361,14 @@ class NPZ_gen:
             'flip': flip,
             'soft_onehot': soft_onehot,
             'hierarchy_onehot': hierarchy_onehot,
+            'gate': gate,
             'keras_model': keras_model,
             'random_scale': random_scale,
             'random_resize': random_resize,
             'random_noise': random_noise,
             'random_crop': random_crop,
+            'random_blur': random_blur,
+            'random_gamma': random_gamma,
             'crop_size': crop_size,
             'crop_top': crop_top,
             'crop_left': crop_left,

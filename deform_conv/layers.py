@@ -292,6 +292,50 @@ class ImageNorm(Layer):
         return input_shape
 
 
+class gated_softmax(Layer):
+
+    def __init__(self, class_num, **kwargs):
+        self.class_num = class_num
+        super(gated_softmax, self).__init__(**kwargs)
+
+    def build(self, input_shape):
+        # Create a trainable weight variable for this layer.
+        super(gated_softmax, self).build(input_shape)  # Be sure to call this somewhere!
+
+    def call(self, xs):
+        shape = xs.get_shape().as_list()
+        assert shape[1] == self.class_num + 1
+        gate = xs[:, 0:1]
+        softmax = xs[:, 1:]
+        return gate * softmax
+
+    def compute_output_shape(self, input_shape):
+        return (input_shape[0], input_shape[1] - 1)
+
+
+class BilinearConv(Layer):
+
+    def __init__(self, **kwargs):
+        super(BilinearConv, self).__init__(**kwargs)
+
+    def build(self, input_shape):
+        # Create a trainable weight variable for this layer.
+        super(BilinearConv, self).build(input_shape)  # Be sure to call this somewhere!
+
+    def call(self, Xs):
+        A, B = Xs
+        shape_a = A.get_shape().as_list()
+        shape_b = B.get_shape().as_list()
+
+
+        return gate * softmax
+
+    def compute_output_shape(self, input_shape):
+        conv1, con2 = input_shape
+
+        return (input_shape[0], input_shape[1] - 1)
+
+
 class CapsuleRouting(Layer):
 
     def __init__(self, input_capsule, output_capsule, input_size, output_size, reduce_max=False, reduce_avg=False, reshape_cnn=False, **kwargs):
@@ -332,7 +376,7 @@ class CapsuleRouting(Layer):
 
         x = self._reshape(x)
         output = self._capsule_net(x, self.input_capsule, self.output_capsule, self.input_size, self.output_size)
-        
+
         if self.reduce_max:
             output = tf.reduce_max(output, axis=2)
         elif self.reduce_avg:

@@ -13,7 +13,9 @@ from keras.losses import categorical_crossentropy
 from termcolor import colored
 
 class EWC:
-    def __init__(self, sess, model, base_loss, DEBUG=False, fisher_multiplier=10, Y_is_softmax=True):
+    def __init__(self, sess, model, base_loss, DEBUG=False,
+                 fisher_multiplier=10, Y_is_softmax=True, model_in=None, model_out=None):
+        self.DEBUG = DEBUG
         self.sess = sess
         self.model = model
         assert len(model.outputs) == 1
@@ -24,9 +26,9 @@ class EWC:
         # self.F_accum = np.zeros([len(model.trainable_weights)])
         self.F_accum = None
         self.var_list = model.trainable_weights
+        self._print(self.var_list)
 
-        self.DEBUG = DEBUG
-        self._build_fisher_graph(Y_is_softmax)
+        self._build_fisher_graph(Y_is_softmax, model_in=model_in, model_out=model_out)
 
     def _print(self, message):
         if self.DEBUG:
@@ -41,10 +43,10 @@ class EWC:
             obj = pickle.load(f)
         return obj
 
-    def _build_fisher_graph(self, Y_is_softmax):
-        self.input_ = input_ = self.model.inputs[0]
-        self.output_ = output_ = self.model.outputs[0]
-        self.target = target = tf.placeholder(tf.float32, shape=[None, output_.get_shape().as_list()[1]])  # onehot target
+    def _build_fisher_graph(self, Y_is_softmax, model_in=None, model_out=None):
+        self.input_ = input_ = self.model.inputs[0] if model_in is None else model_in
+        self.output_ = output_ = self.model.outputs[0] if model_out is None else model_out
+        # self.target = target = tf.placeholder(tf.float32, shape=[None, output_.get_shape().as_list()[1]])  # onehot target
 
         if Y_is_softmax:
             probs = output_
@@ -61,8 +63,12 @@ class EWC:
         # class_ind = tf.to_int32(tf.multinomial(tf.log(probs), 1)[0][0])
         class_ind = tf.argmax(probs, axis=1)
 
-        batch_prob = tf.log(tf.gather(probs, class_ind))  # use onehot target as loss weight
-        batch_prob = tf.reduce_sum(batch_prob)
+        # self._debug_ders = batch_prob = tf.log(probs)
+        # self._debug_ders = tf.gather(probs, class_ind)
+        # self._debug_ders = class_ind
+        self._debug_ders = tf.reduce_max(probs, axis=1)
+        batch_prob = tf.log(tf.reduce_max(probs, axis=1))  # use onehot target as loss weight
+        # batch_prob = tf.reduce_sum(batch_prob)
         ders = tf.gradients(batch_prob, self.var_list)
         sq_der = [tf.square(der) for der in ders]
         self.sq_der = sq_der
@@ -79,16 +85,16 @@ class EWC:
             if data_count > max_step:
                 break
 
-            f = self.sess.run(self.sq_der, feed_dict={
+            f, _f = self.sess.run([self.sq_der, self._debug_ders], feed_dict={
                     K.backend.learning_phase(): 0,
                     self.input_: x,
-                    self.target: y,
                 })
             # self._print(f)
+            # input()
 
             for i, fc in zip(range(len(self.F_accum)), f):
                 self.F_accum[i] += fc
-            data_count += 1
+            data_count += x.shape[0]
 
         # TODO: use nparray will faster
         for i in range(len(self.F_accum)):
@@ -108,7 +114,6 @@ class EWC:
 
         if self.F_accum is not None:
             # TODO: need a more effice way to clac ewc term, since morden network easy contain >> 1M parameter
-            # self._print(self.F_accum)
 
             self._print("Using ewc loss terms!")
             for v in range(len(self.var_list)):
@@ -121,14 +126,38 @@ class EWC:
 
         return ewc_loss
 
+    def merge_weight(self, last_weight=None):
+        assert self.F_accum is not None, 'Need fisher infomation of trainable variable to do this!'
+        assert last_weight != None or len(self.star_vars) > 0
+
+        for i in range(len(self.var_list)):
+            f_info = self.F_accum[i]
+            flat_f = f_info.reshape([-1])
+            flat_f.sort()
+            gate = flat_f[int(len(flat_f) / 4 * 3)]
+            self._print(gate)
+            f_mask = np.greater(f_info, gate).astype(np.float32)
+            # self._print(f_mask)
+
+            star = self.star_vars[i]
+            star_masked = star * f_mask
+            # self._print(star_masked)
+
+            var = self.var_list[i].eval()
+            var_masked = var * np.abs(f_mask - 1)
+            # self._print(var_masked)
+
+            new_var = var_masked + star_masked
+            self.sess.run(tf.assign(self.var_list[i], new_var))
+            self._print('[%s] Insert %d/%d Variable' % (self.var_list[i].name, f_mask.sum(), np.prod(f_mask.shape)))
+
 
 def PGCE(y_true, y_pred):
-    # print('-' * 100)
-    # print(y_true.get_shape().as_list())
-    # print(y_pred.get_shape().as_list())
-    # print('-' * 100)
     CE = categorical_crossentropy(y_true, y_pred)
-    PG = tf.multiply(tf.abs(y_true - 1), y_pred)
+    PG = tf.multiply(
+        tf.abs(y_true - tf.reduce_max(y_true)),
+        (y_pred)
+    )
     PG = tf.reduce_sum(PG, axis=1)
     PG = tf.reduce_mean(PG, axis=0)
     return CE + PG

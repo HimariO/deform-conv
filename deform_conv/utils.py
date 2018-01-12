@@ -76,7 +76,34 @@ def make_parallel(model, gpu_count):
     # merge outputs on CPU
     with tf.device('/cpu:0'):
         merged = []
+        count = 0
         for outputs in outputs_all:
-            merged.append(concatenate(outputs, axis=0))
+            merged.append(concatenate(outputs, axis=0, name='output_%d' % count))
+            count += 1
 
         return Model(inputs=model.inputs, outputs=merged)
+
+
+def montecarlo_prediction(model, X_data, T):
+    """
+    # model - the trained classifier(C classes)
+    #                   where the last layer applies softmax
+    # X_data - a list of input data(size N)
+    # T - the number of monte carlo simulations to run
+    """
+    # shape: (T, N, C)
+    predictions = np.array([model.predict(X_data) for _ in range(T)])
+
+    # shape: (N, C)
+    prediction_probabilities = np.mean(predictions, axis=0)
+
+    # shape: (N)
+    prediction_variances = np.apply_along_axis(predictive_entropy, axis=1, arr=prediction_probabilities)
+    return (prediction_probabilities, prediction_variances)
+
+def predictive_entropy(prob):
+    """
+    # prob - prediction probability for each class(C). Shape: (N, C)
+    # returns - Shape: (N)
+    """
+    return -1 * np.sum(np.log(prob) * prob, axis=1)

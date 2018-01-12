@@ -108,12 +108,32 @@ class SpreadSheet(Callback):
 		self.sheet_name = sheet_name
 
 	def on_epoch_end(self, epoch, logs={}):
+		loss = 0
+		acc = 0
+		train_acc = 0
+
+		if 'loss' in logs:
+			loss = logs.get('loss')
+		else:
+			for k in logs:
+				if 'loss' in k:
+					loss = logs[k]
+					break
+
+		if 'val_acc' in logs:
+			acc = logs.get('val_acc')
+		else:
+			for k in logs:
+				if 'val' in k and 'acc' in k and logs[k] < 1:
+					acc = logs[k]
+					break
+
 		tup_log = (
 			self.sheet_id,
 			self.sheet_name,
 			epoch,
-			logs.get('loss'),
-			logs.get('val_acc'),
+			loss,
+			acc,
 		)
 		command = "python3.5 pyGooSheet/pyGooSheet.py -i %s -sh %s -s %d -l %f -a %f" % tup_log
 		os.system(command)

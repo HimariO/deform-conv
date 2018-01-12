@@ -46,7 +46,7 @@ test_scaled_gen = dataset.get_val(num_batch=validation_steps)
 
 config = tf.ConfigProto()
 config.gpu_options.allow_growth = True
-config.gpu_options.per_process_gpu_memory_fraction = 0.3
+config.gpu_options.per_process_gpu_memory_fraction = 1
 
 with tf.Session(config=config) as sess:
     with tf.device(GPU):
@@ -139,5 +139,5 @@ with tf.Session(config=config) as sess:
 
         print(pred_counter)
         ans_list = ans_list[:len(pred_list)]
-        compare = list(map(lambda x: int(x[0] == x[1]), zip(ans_list, pred_list)))
+        compare = list(map(lambda x: int(abs(x[0] - x[1]) <= 1), zip(ans_list, pred_list)))
         print(sum(compare) / len(compare))

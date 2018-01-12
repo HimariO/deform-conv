@@ -91,8 +91,8 @@ train_data, test_data = get_fashion_mnist()
 task1_train_gen = stage_generator(0, train_data, batch_size, 100)
 task2_train_gen = stage_generator(1, train_data, batch_size, 100)
 
-task1_val_gen = stage_generator(0, test_data, batch_size, 100)
-task2_val_gen = stage_generator(1, test_data, batch_size, 100)
+task1_val_gen = stage_generator(0, test_data, 1, 100)
+task2_val_gen = stage_generator(1, test_data, 1, 100)
 
 config = tf.ConfigProto()
 config.gpu_options.allow_growth = True
@@ -111,25 +111,38 @@ with tf.Session(config=config) as sess:
         # if GPU_NUM > 1:
         #     model = make_parallel(model, GPU_NUM)
 
+        optim = Adam(1e-4)
+        # optim = SGD(1e-4, momentum=0.99, nesterov=True)
+        loss = categorical_crossentropy
+        ewc = EWC(sess, model, loss, DEBUG=True, fisher_multiplier=50)
+        loss = ewc.loss
+        model.compile(optim, loss, metrics=['accuracy'])
+
         if args.weight is not None:
             print(colored("[weight] %s" % args.weight, color='green'))
             model.load_weights(args.weight)
 
-        optim = Adam(1e-4)
-        # optim = SGD(1e-4, momentum=0.99, nesterov=True)
-        loss = categorical_crossentropy
-        ewc = EWC(sess, model, loss, DEBUG=True, fisher_multiplier=2)
-        loss = ewc.loss
-        model.compile(optim, loss, metrics=['accuracy'])
+            val_loss1, val_acc1 = model.evaluate_generator(
+                task1_val_gen, steps=validation_steps
+            )
+
+            val_loss2, val_acc2 = model.evaluate_generator(
+                task2_val_gen, steps=validation_steps
+            )
+
+            print('-' * 100)
+            print('task1 loss, acc: ', val_loss1, val_acc1)
+            print('task2 loss, acc: ', val_loss2, val_acc2)
+            print('-' * 100)
 
         checkpoint = ModelCheckpoint("cnn_ewc_test.h5", monitor='val_acc', save_best_only=True)
         checkpoint_tl = ModelCheckpoint("cnn_ewc_test_trainbest.h5", monitor='loss', save_best_only=True)
 
         try:
-            total_epoch = 10
-            switch_task = total_epoch // 3
+            total_epoch = 3
+            switch_task = 2
             for ii in range(total_epoch):
-                print(colored('Epoch[%d]' % ii, color='green'))
+                print(colored('Round[%d]' % ii, color='green'))
 
                 if ii < switch_task - 1 and os.path.exists('cnn_ewc_task1.h5'):
                     print(colored('SKIP Epoch[%d]' % ii, color='green'))
@@ -141,17 +154,19 @@ with tf.Session(config=config) as sess:
 
                 train_gen = task1_train_gen if ii < switch_task else task2_train_gen
                 val_gen = task1_val_gen if ii < switch_task else task2_val_gen
+                train_task = 'task1_train' if ii < switch_task else 'task2_train'
 
+                print('Train on %s' % train_task)
                 model.fit_generator(
                     train_gen, steps_per_epoch=steps_per_epoch,
-                    epochs=1, verbose=1,
+                    epochs=3, verbose=1,
                     validation_data=val_gen, validation_steps=validation_steps,
                     callbacks=[checkpoint, checkpoint_tl]
                 )
 
                 if ii == switch_task - 1:
                     model.save_weights('cnn_ewc_task1.h5')
-                    ewc.update_fisher(val_gen, batch=batch_size, max_step=100)
+                    ewc.update_fisher(val_gen, batch=batch_size, max_step=6000)
                     # loss = ewc.loss
                     model.compile(optim, loss, metrics=['accuracy'])
 
@@ -167,6 +182,30 @@ with tf.Session(config=config) as sess:
                 print('[%s] val_loss: ' % val_task, val_loss)
                 print('[%s] val_acc: ' % val_task, val_acc)
                 print('-' * 100)
+
+
+                if ii == total_epoch - 1:
+                    val_loss, val_acc = model.evaluate_generator(
+                        task1_val_gen, steps=validation_steps
+                    )
+                    print('[task1] val_acc: ', val_acc)
+
+                    val_loss, val_acc = model.evaluate_generator(
+                        task2_val_gen, steps=validation_steps
+                    )
+                    print('[task2] val_acc: ', val_acc)
+
+                    ewc.merge_weight()
+
+                    val_loss, val_acc = model.evaluate_generator(
+                        task1_val_gen, steps=validation_steps
+                    )
+                    print('[task1] val_acc: ', val_acc)
+
+                    val_loss, val_acc = model.evaluate_generator(
+                        task2_val_gen, steps=validation_steps
+                    )
+                    print('[task2] val_acc: ', val_acc)
 
         except KeyboardInterrupt:
             model.save_weights('cnn_ewc_interrupt.h5')

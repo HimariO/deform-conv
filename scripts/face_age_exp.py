@@ -42,7 +42,7 @@ GPU = args.gpu
 
 img_size = 200
 class_num = 6
-batch_size = 32 * GPU_NUM
+batch_size = 128 * GPU_NUM
 # batch_size = 160 * GPU_NUM #  65*65 img
 n_train = (88000 + 0) * 1  # Currenly using 200*200 & mtcnn 65*65 dataset
 # n_train = batch_size * 10
@@ -67,7 +67,7 @@ def crop_wrap(generator):
 dataset = NPZ_gen(
     './face_age_dataset', class_num, batch_size, 1000,
     dataset_size=n_train, flip=True, hierarchy_onehot=False,
-    random_scale=None, random_crop=0.25, random_resize=None, random_noise=None, random_gamma=0.6,
+    random_scale=0.2, random_crop=None, random_resize=None, random_noise=0.001,
 )
 
 train_scaled_gen = dataset.get_some()
@@ -82,20 +82,20 @@ with tf.Session(config=config) as sess:
 
         # ---
         # Deformable CNN
-        inputs, outputs = get_large_deform_cnn(class_num, trainable=True)
+        inputs, outputs = get_cnn(class_num, trainable=True)
         # inputs, outputs = NASNet(class_num, trainable=True, img_size=200)
         model = Model(inputs=inputs, outputs=outputs)
         # print(colored("[model_inputs]", color='green'), inputs)
         # print(colored("[model_outputs]", color='green'), outputs)
 
-        # model = NASNetMobile(input_shape=(200, 200, 3), classes=6, include_top=False)
+
         # model = Model(inputs=model.inputs, outputs=[x])
 
-        model.summary()
 
+        model.summary()
         if GPU_NUM > 1:
             model = make_parallel(model, GPU_NUM)
-            # model.summary()
+        # model.summary()
 
         model = model_save_wrapper(model)
 
@@ -104,14 +104,14 @@ with tf.Session(config=config) as sess:
             model.load_weights(args.weight)
 
         optim = Adam(1e-4)
-        # loss = categorical_crossentropy
-        loss = PGCE
+        loss = categorical_crossentropy
+        # loss = PGCE
 
         model.compile(optim, [loss], metrics=['accuracy'])
-        # checkpoint = ModelCheckpoint("deform_cnn_inv_best.npz", monitor='val_acc', save_best_only=False)
-        # checkpoint_tl = ModelCheckpoint("deform_cnn_inv_trainbest.npz", monitor='loss', save_best_only=False)
-        checkpoint = NpyCheckPoint(model, "deform_cnn_inv_best.npz", monitor='val_acc')
-        checkpoint_tl = NpyCheckPoint(model, "deform_cnn_inv_trainbest.npz", monitor='loss')
+        # checkpoint = ModelCheckpoint("deform_cnn_exp_best.npz", monitor='val_acc', save_best_only=False)
+        # checkpoint_tl = ModelCheckpoint("deform_cnn_exp_trainbest.npz", monitor='loss', save_best_only=False)
+        checkpoint = NpyCheckPoint(model, "deform_cnn_exp_best.npz", monitor='val_acc')
+        checkpoint_tl = NpyCheckPoint(model, "deform_cnn_exp_trainbest.npz", monitor='loss')
         spreadsheet = SpreadSheet("1nu6AFqzeYc2rNFAjtUtem-CFYKiRI4HCmXkxWsGglRg", "DeformFaceAgeML3")
 
         if args.img_dir is None:
@@ -129,8 +129,8 @@ with tf.Session(config=config) as sess:
 
                 print('Test accuracy of deformable convolution with scaled images', val_acc)
             except KeyboardInterrupt:
-                model.save_weights('deform_cnn_inv_interrupt.npz')
-                # np.savez('deform_cnn_inv_interrupt.npz', weights=model.get_weights())
+                model.save_weights('deform_cnn_exp_interrupt.npz')
+                # np.savez('deform_cnn_exp_interrupt.npz', weights=model.get_weights())
         else:
             if True:
 

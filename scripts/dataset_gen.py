@@ -493,6 +493,7 @@ if __name__ == "__main__":
     i = 0
     # npz_2('../../val_set', resize=[200, 200])
 
+    # npz_2('../../COCO', resize=[200, 200])
     mix_dataset('face_age_dataset')
 
     # GEn = NPZ_gen('./mtcnn_face_age', 10, 32, 1, dataset_size=95000)

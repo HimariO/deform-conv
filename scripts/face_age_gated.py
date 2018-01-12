@@ -8,21 +8,16 @@ import shutil
 from termcolor import colored
 import tensorflow as tf
 
-import keras as K
+import keras.backend as K
 from keras.models import Model
 from keras.losses import categorical_crossentropy
 from keras.optimizers import Adam, SGD
 from keras.callbacks import ModelCheckpoint
 from keras.preprocessing.image import ImageDataGenerator
-from keras import metrics
 
-from deform_conv.callbacks import TensorBoard, SpreadSheet, NpyCheckPoint
+from deform_conv.callbacks import TensorBoard, SpreadSheet
 from deform_conv.cnn import *
-from deform_conv.NASNet import *
-from deform_conv.utils import make_parallel, model_save_wrapper
-from deform_conv.losses import *
-from deform_conv.nasnet import *
-# from keras.layers import GlobalAveragePooling2D, Dropout, Dense, Flatten
+from deform_conv.utils import make_parallel
 
 from dataset_gen_ import NPZ_gen
 from PIL import Image
@@ -42,32 +37,17 @@ GPU = args.gpu
 
 img_size = 200
 class_num = 6
-batch_size = 32 * GPU_NUM
+batch_size = 64 * GPU_NUM
 # batch_size = 160 * GPU_NUM #  65*65 img
-n_train = (88000 + 0) * 1  # Currenly using 200*200 & mtcnn 65*65 dataset
+n_train = (88000) * 1  # Currenly using 200*200 & mtcnn 65*65 dataset
 # n_train = batch_size * 10
 steps_per_epoch = int(np.ceil(n_train / batch_size))
 validation_steps = 4000 // batch_size
 
-
-def main_metric(y_t, y_p):
-    return metrics.top_k_categorical_accuracy(y_t, y_p, k=3)
-
-
-def crop_wrap(generator):
-    for x, y in generator:
-        new_x = []
-        for img in x:
-            h, w, c = img.shape
-            new_img =  img[int(h * 0.1):int(h * 0.9), int(w * 0.1):int(w * 0.9), :]
-            new_x.append(new_img)
-        yield np.array(new_x), y
-
-
 dataset = NPZ_gen(
     './face_age_dataset', class_num, batch_size, 1000,
-    dataset_size=n_train, flip=True, hierarchy_onehot=False,
-    random_scale=None, random_crop=0.25, random_resize=None, random_noise=None, random_gamma=0.6,
+    dataset_size=n_train, flip=True, hierarchy_onehot=False, gate=True,
+    random_scale=None, random_crop=0.1, random_resize=None, random_noise=0.01, random_blur=True,
 )
 
 train_scaled_gen = dataset.get_some()
@@ -78,40 +58,31 @@ config.gpu_options.allow_growth = True
 
 with tf.Session(config=config) as sess:
     with tf.device(GPU):
-        # K.backend.set_session(sess)
+        K.set_session(sess)
 
         # ---
         # Deformable CNN
-        inputs, outputs = get_large_deform_cnn(class_num, trainable=True)
-        # inputs, outputs = NASNet(class_num, trainable=True, img_size=200)
+        inputs, outputs = get_DCNN(class_num, trainable=True)
         model = Model(inputs=inputs, outputs=outputs)
-        # print(colored("[model_inputs]", color='green'), inputs)
-        # print(colored("[model_outputs]", color='green'), outputs)
 
-        # model = NASNetMobile(input_shape=(200, 200, 3), classes=6, include_top=False)
-        # model = Model(inputs=model.inputs, outputs=[x])
-
-        model.summary()
+        # model.summary()
 
         if GPU_NUM > 1:
             model = make_parallel(model, GPU_NUM)
-            # model.summary()
-
-        model = model_save_wrapper(model)
+            model.summary()
 
         if args.weight is not None:
             print(colored("[weight] %s" % args.weight, color='green'))
             model.load_weights(args.weight)
 
         optim = Adam(1e-4)
-        # loss = categorical_crossentropy
-        loss = PGCE
+        # optim = SGD(1e-4, momentum=0.99, nesterov=True)
+        loss = categorical_crossentropy
+        # model._weights('../models/deform_cnn.h5')
 
-        model.compile(optim, [loss], metrics=['accuracy'])
-        # checkpoint = ModelCheckpoint("deform_cnn_inv_best.npz", monitor='val_acc', save_best_only=False)
-        # checkpoint_tl = ModelCheckpoint("deform_cnn_inv_trainbest.npz", monitor='loss', save_best_only=False)
-        checkpoint = NpyCheckPoint(model, "deform_cnn_inv_best.npz", monitor='val_acc')
-        checkpoint_tl = NpyCheckPoint(model, "deform_cnn_inv_trainbest.npz", monitor='loss')
+        model.compile(optim, [loss, 'mean_squared_error'], metrics=['accuracy'])
+        checkpoint = ModelCheckpoint("deform_cnn_gate_best.h5", monitor='concatenate_3_acc', save_best_only=True)
+        checkpoint_tl = ModelCheckpoint("deform_cnn_gate_trainbest.h5", monitor='loss', save_best_only=True)
         spreadsheet = SpreadSheet("1nu6AFqzeYc2rNFAjtUtem-CFYKiRI4HCmXkxWsGglRg", "DeformFaceAgeML3")
 
         if args.img_dir is None:
@@ -120,7 +91,7 @@ with tf.Session(config=config) as sess:
                     train_scaled_gen, steps_per_epoch=steps_per_epoch,
                     epochs=1000, verbose=1,
                     validation_data=test_scaled_gen, validation_steps=validation_steps,
-                    callbacks=[checkpoint, checkpoint_tl, spreadsheet], workers=12, max_queue_size=36,
+                    callbacks=[checkpoint, checkpoint_tl, spreadsheet], max_queue_size=36,
                 )
 
                 val_loss, val_acc = model.evaluate_generator(
@@ -129,10 +100,17 @@ with tf.Session(config=config) as sess:
 
                 print('Test accuracy of deformable convolution with scaled images', val_acc)
             except KeyboardInterrupt:
-                model.save_weights('deform_cnn_inv_interrupt.npz')
-                # np.savez('deform_cnn_inv_interrupt.npz', weights=model.get_weights())
+                model.save_weights('deform_cnn_gate_interrupt.h5')
         else:
             if True:
+                def crop_wrap(generator):
+                    for x, y in generator:
+                        new_x = []
+                        for img in x:
+                            h, w, c = img.shape
+                            new_img =  img[int(h * 0.1):int(h * 0.9), int(w * 0.1):int(w * 0.9), :]
+                            new_x.append(new_img)
+                        yield np.array(new_x), y
 
                 img_data = ImageDataGenerator()
                 img_gen = img_data.flow_from_directory(
