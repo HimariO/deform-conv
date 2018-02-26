@@ -67,7 +67,7 @@ def crop_wrap(generator):
 dataset = NPZ_gen(
     './face_age_dataset', class_num, batch_size, 1000,
     dataset_size=n_train, flip=True, hierarchy_onehot=False,
-    random_scale=0.2, random_crop=None, random_resize=None, random_noise=0.001,
+    random_scale=0.2, random_crop=None, random_resize=None, random_noise=None,
 )
 
 train_scaled_gen = dataset.get_some()
@@ -82,7 +82,7 @@ with tf.Session(config=config) as sess:
 
         # ---
         # Deformable CNN
-        inputs, outputs = get_cnn(class_num, trainable=True)
+        inputs, outputs = get_test_cnn(class_num, trainable=True)
         # inputs, outputs = NASNet(class_num, trainable=True, img_size=200)
         model = Model(inputs=inputs, outputs=outputs)
         # print(colored("[model_inputs]", color='green'), inputs)

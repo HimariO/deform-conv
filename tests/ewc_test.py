@@ -103,7 +103,7 @@ with tf.Session(config=config) as sess:
 
         # ---
         # Deformable CNN
-        inputs, outputs = get_cnn(class_num)
+        inputs, outputs = get_ewc_cnn(class_num)
         model = Model(inputs=inputs, outputs=outputs)
 
         model.summary()
@@ -167,7 +167,7 @@ with tf.Session(config=config) as sess:
                 if ii == switch_task - 1:
                     model.save_weights('cnn_ewc_task1.h5')
                     ewc.update_fisher(val_gen, batch=batch_size, max_step=6000)
-                    # loss = ewc.loss
+                    loss = ewc.loss
                     model.compile(optim, loss, metrics=['accuracy'])
 
                 val_gen = task1_val_gen

@@ -67,6 +67,7 @@ class EWC:
         # self._debug_ders = tf.gather(probs, class_ind)
         # self._debug_ders = class_ind
         self._debug_ders = tf.reduce_max(probs, axis=1)
+        # batch_prob = tf.log(tf.reduce_sum(probs))  # use onehot target as loss weight
         batch_prob = tf.log(tf.reduce_max(probs, axis=1))  # use onehot target as loss weight
         # batch_prob = tf.reduce_sum(batch_prob)
         ders = tf.gradients(batch_prob, self.var_list)
@@ -134,7 +135,7 @@ class EWC:
             f_info = self.F_accum[i]
             flat_f = f_info.reshape([-1])
             flat_f.sort()
-            gate = flat_f[int(len(flat_f) / 4 * 3)]
+            gate = flat_f[int(len(flat_f) / 4 * 2.5)]
             self._print(gate)
             f_mask = np.greater(f_info, gate).astype(np.float32)
             # self._print(f_mask)

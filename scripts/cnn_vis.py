@@ -36,11 +36,11 @@ parser = argparse.ArgumentParser()
 parser.add_argument("-w", "--weight", help=".h5 model weight file.")
 parser.add_argument("-i", "--img_dir", help=".h5 model weight file.")
 args = parser.parse_args()
-class_num = 6
+class_num = 2
 # Build the VGG16 network with ImageNet weights
-inputs, outputs = get_large_res_deform_cnn2(class_num, trainable=False)
-# inputs, outputs = get_large_deform_cnn(class_num, trainable=False)
+inputs, outputs = get_large_deform_cnn(class_num, trainable=False)
 model = Model(inputs=inputs, outputs=outputs)
+# model = get_large_deform_cnn(class_num, trainable=True)
 model.load_weights(args.weight)
 # model = load_model(args.weight, custom_objects={'InvConv2D': InvConv2D})
 print('Model loaded.')
@@ -76,7 +76,7 @@ for i, img in zip(range(len(imgs)), imgs):
     plt.imshow(img)
 
     # 20 is the imagenet index corresponding to `ouzel`
-    for c in range(6):
+    for c in range(class_num):
         grads = visualize_saliency(model, layer_idx, filter_indices=c, seed_input=img)
         a = fig.add_subplot(3, 3, 2 + c)
         a.set_title(label[c])

@@ -2,11 +2,15 @@ from __future__ import absolute_import, division
 
 
 import tensorflow as tf
+from tensorflow.python.framework import function
 import keras.backend as K
 
 from keras.layers import Conv2D, SeparableConv2D
 from keras.engine.topology import Layer
 from keras.initializers import RandomNormal
+from keras.utils import conv_utils
+from keras import regularizers
+
 from deform_conv.deform_conv import tf_batch_map_offsets, add_batch_grid
 
 
@@ -40,7 +44,7 @@ class ConvOffset2D(Conv2D):
             **kwargs
         )
 
-    def call(self, x, use_resam=False):
+    def call(self, x, use_resam=True):
         """
         Return the deformed featured map
         x: (b, h, w, f) output of other conv layer.
@@ -109,27 +113,8 @@ class ConvOffset2D(Conv2D):
 
 
 class SepConvOffset2D(ConvOffset2D, SeparableConv2D):
-    """ConvOffset2D
-
-    Convolutional layer responsible for learning the 2D offsets and output the
-    deformed feature map using bilinear interpolation
-
-    Note that this layer does not perform convolution on the deformed feature
-    map. See get_deform_cnn in cnn.py for usage
-    """
 
     def __init__(self, filters, init_normal_stddev=0.01, **kwargs):
-        """Init
-
-        Parameters
-        ----------
-        filters : int
-            Number of channel of the input feature map
-        init_normal_stddev : float
-            Normal kernel initialization
-        **kwargs:
-            Pass to superclass. See Con2D layer in Keras
-        """
 
         self.filters = filters
         super(ConvOffset2D, self).__init__(
@@ -292,48 +277,100 @@ class ImageNorm(Layer):
         return input_shape
 
 
-class gated_softmax(Layer):
+class sparse_conv2d(Conv2D):
 
-    def __init__(self, class_num, **kwargs):
-        self.class_num = class_num
-        super(gated_softmax, self).__init__(**kwargs)
+    def call(self, x):
 
-    def build(self, input_shape):
-        # Create a trainable weight variable for this layer.
-        super(gated_softmax, self).build(input_shape)  # Be sure to call this somewhere!
+        @function.Defun(tf.float32, tf.float32)
+        def k_grad(op, dy):
+            output_size = tf.shape(dy)
 
-    def call(self, xs):
-        shape = xs.get_shape().as_list()
-        assert shape[1] == self.class_num + 1
-        gate = xs[:, 0:1]
-        softmax = xs[:, 1:]
-        return gate * softmax
+            dy_flat = tf.reshape(dy, [-1, output_size[3]])
+            dy_flat = tf.transpose(dy_flat, perm=[1, 0])
 
-    def compute_output_shape(self, input_shape):
-        return (input_shape[0], input_shape[1] - 1)
+            # values, indices = tf.nn.top_k(
+            #     tf.abs(dy_flat),
+            #     k=tf.reduce_prod(output_size[:2]) // 2
+            # )
+
+            # mean, var = tf.nn.moments(tf.abs(dy_flat))
+            # gate_value = mean - var * 0.8
+            gate_value = tf.reduce_mean(tf.abs(dy_flat))
+
+            # mid = tf.fill(tf.shape(dy_flat), gate_value)
+            mask = tf.greater(tf.abs(dy_flat), gate_value)
+            mask = tf.cast(mask, tf.float32)
+
+            spare_dy = tf.multiply(dy_flat, mask)
+            spare_dy = tf.transpose(spare_dy, perm=[1, 0])
+            spare_dy = tf.reshape(spare_dy, output_size)
+            spare_dy += 0
+
+            return spare_dy - spare_dy
+
+        @function.Defun(tf.float32, grad_func=k_grad)
+        def grad_filter(filter_w):
+            return filter_w
+
+        self.kernel = grad_filter(self.kernel)
+
+        return super(sparse_conv2d, self).call(x)
 
 
-class BilinearConv(Layer):
+class GaussianAtten(Layer):
 
     def __init__(self, **kwargs):
-        super(BilinearConv, self).__init__(**kwargs)
+        super(GaussianAtten, self).__init__(**kwargs)
 
     def build(self, input_shape):
         # Create a trainable weight variable for this layer.
-        super(BilinearConv, self).build(input_shape)  # Be sure to call this somewhere!
+        super(GaussianAtten, self).build(input_shape)  # Be sure to call this somewhere!
 
-    def call(self, Xs):
-        A, B = Xs
-        shape_a = A.get_shape().as_list()
-        shape_b = B.get_shape().as_list()
+    def gaussian_mask(u, s, r):
+        """
+        :param u: tf.Tensor, centre of the first Gaussian.
+        :param s: tf.Tensor, standard deviation of Gaussians.
+        :param d: tf.Tensor, shift between Gaussian centres.
+        :param R: int, number of rows in the mask, there is one Gaussian per row.
+        :param C: int, number of columns in the mask.
+        """
+        # indices to create centres
+        R = tf.to_float(tf.reshape(tf.range(r), (1, tf.to_int32(r))))
+        R = tf.matmul(tf.ones([tf.shape(u)[0], 1]), R)
 
+        mask = tf.exp(-.5 * tf.square((R - u) / s))
+        # we add eps for numerical stability
+        # normalised_mask = mask / tf.reduce_sum(mask, 1, keep_dims=True) + 1e-8
+        return mask
 
-        return gate * softmax
+    def call(self, x):
+
+        return x
 
     def compute_output_shape(self, input_shape):
-        conv1, con2 = input_shape
+        return (input_shape[0], input_shape[1], input_shape[2], 1)
 
-        return (input_shape[0], input_shape[1] - 1)
+
+class ReduceMax2D(Layer):
+
+    def __init__(self, **kwargs):
+        super(ReduceMax2D, self).__init__(**kwargs)
+
+    def build(self, input_shape):
+        # Create a trainable weight variable for this layer.
+        super(ReduceMax2D, self).build(input_shape)  # Be sure to call this somewhere!
+
+    def call(self, A_B):
+        A = tf.expand_dims(A_B[0], -1)
+        B = tf.expand_dims(A_B[1], -1)
+        AB = tf.concat([A, B], -1)
+
+        return tf.reduce_max(AB, axis=-1)
+
+    def compute_output_shape(self, input_shape):
+        shape_A, shape_B = input_shape
+
+        return shape_A
 
 
 class CapsuleRouting(Layer):
@@ -437,7 +474,157 @@ class CapsuleRouting(Layer):
             return (input_shape[0], self.output_capsule, self.output_size)
 
 
-def OrthLocalReg2D(W, L=10., ratio=1e-2):
+
+class CapsulePooling2D(Layer):
+    def __init__(self, pool_size, num_steps, **kwargs):
+        self.pool_size = pool_size
+        self.strides = pool_size
+        self.num_steps = num_steps
+        super(CapsulePooling2D, self).__init__(**kwargs)
+
+    def get_config(self):
+        config = {
+            'pool_size': self.pool_size,
+            'num_steps': self.num_steps
+        }
+        base_config = super(CapsulePooling2D, self).get_config()
+        return dict(list(base_config.items()) + list(config.items()))
+
+    def build(self, input_shape):
+        super(CapsulePooling2D, self).build(input_shape)
+
+    @staticmethod
+    def squash_fm(fm):
+        v_lenght = tf.norm(fm, axis=-1, keep_dims=True)
+        v_lenght = v_lenght + K.epsilon()
+        fm = fm / (1 + v_lenght)
+        return fm
+
+    @staticmethod
+    def normalize_pool_map(score_map, pool_size=(2, 2), strides=(2, 2), temperature=1):
+        # compute safe softmax by pool operation
+        padding = 'same'
+        input_shape = K.int_shape(score_map)
+
+        pooled_max_map = K.pool2d(
+            score_map, pool_size=pool_size, strides=strides, pool_mode='max',
+            padding=padding
+        )
+        max_map = K.resize_images(
+            pooled_max_map,
+            pool_size[0],
+            pool_size[1],
+            data_format='channels_last'
+        )
+
+        max_map = max_map[:, :input_shape[1], :input_shape[2], :]
+        max_map = K.stop_gradient(max_map)
+        score_map = score_map - max_map
+        score_map = tf.exp(score_map / temperature)
+
+        pooled_score_map = K.pool2d(
+            score_map, pool_size=pool_size, strides=strides, pool_mode='avg',
+            padding=padding
+        )
+
+        avg_score_map = K.resize_images(
+            pooled_score_map,
+            pool_size[0],
+            pool_size[1],
+            data_format='channels_last'
+        )
+        # fit caps columns to feature map
+        avg_score_map = avg_score_map[:, :input_shape[1], :input_shape[2], :]
+
+        return score_map / (avg_score_map + K.epsilon())
+
+    @staticmethod
+    def routing_step(feature_map, pool_size, strides, score_map):
+
+        # Compute average vector
+        if score_map is None:
+            # in first iteration we cannot compute weights average
+            # just take input feature map
+            weighted_fm = feature_map
+        else:
+            # normalize scores
+            normalized_scores = CapsulePooling2D.normalize_pool_map(
+                score_map, pool_size=pool_size, strides=strides, temperature=2
+            )
+            weighted_fm = normalized_scores * feature_map
+
+
+        avg_feature_map = K.pool2d(
+            weighted_fm,
+            pool_size=pool_size,
+            strides=strides,
+            pool_mode='avg', padding='same'
+        )
+
+        avg_feature_map = CapsulePooling2D.squash_fm(avg_feature_map)
+        avg_feature_columns = K.resize_images(
+            avg_feature_map,
+            pool_size[0],
+            pool_size[1],
+            data_format='channels_last'
+        )
+        # fit caps columns to feature map
+        input_shape = K.int_shape(feature_map)
+        avg_feature_columns = avg_feature_columns[
+                              :, :input_shape[1], :input_shape[2], :input_shape[3]]
+
+        # compute V * Vs
+        new_score_map = K.sum(feature_map * avg_feature_columns, -1, keepdims=True)
+
+        if score_map is None:
+            score_map = new_score_map
+        else:
+            score_map = score_map + new_score_map
+
+        return score_map, weighted_fm
+
+    @staticmethod
+    def routing_pool(feature_map, pool_size, strides, num_steps):
+
+        score_map = None
+        steps_history = []
+        weighted_fm = None
+        for i in range(num_steps):
+            score_map, weighted_fm = CapsulePooling2D.routing_step(
+                feature_map,
+                pool_size=pool_size,
+                strides=strides,
+                score_map=score_map
+            )
+            steps_history.append(score_map)
+
+        output_feature_map = K.pool2d(
+            weighted_fm,
+            pool_size=pool_size,
+            strides=strides,
+            pool_mode='avg', padding='same'
+        )
+        return output_feature_map, steps_history
+
+    def call(self, x):
+        pool_size = self.pool_size
+        strides = self.strides
+        num_steps = self.num_steps
+        x, _ = self.routing_pool(x, pool_size, strides, num_steps)
+        return x
+
+    def compute_output_shape(self, input_shape):
+        padding = 'same'
+        rows = input_shape[1]
+        cols = input_shape[2]
+        rows = conv_utils.conv_output_length(rows, self.pool_size[0],
+                                             padding, self.strides[0])
+        cols = conv_utils.conv_output_length(cols, self.pool_size[1],
+                                             padding, self.strides[1])
+        return (input_shape[0], rows, cols, input_shape[3])
+
+
+def OrthLocalReg2D(W, L=10., ratio=1e-2, L2=None):
     """
     Local orthognal reguliation for 2D CNN filter
     W: (height, width, input_channel, filter_num)
@@ -458,7 +645,11 @@ def OrthLocalReg2D(W, L=10., ratio=1e-2):
     cost = cost - tf.diag(tf.diag_part(cost))
     cost = tf.reduce_sum(cost)
 
-    return cost * ratio
+    if L2:
+        l2_cost = regularizers.l2(L2)(W)
+        return cost * ratio + l2_cost
+    else:
+        return cost * ratio
 
 
 def OrthLocalRegSep2D(W, L=10., ratio=5e-4):

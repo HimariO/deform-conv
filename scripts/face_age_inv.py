@@ -19,7 +19,7 @@ from keras import metrics
 from deform_conv.callbacks import TensorBoard, SpreadSheet, NpyCheckPoint
 from deform_conv.cnn import *
 from deform_conv.NASNet import *
-from deform_conv.utils import make_parallel, model_save_wrapper
+from deform_conv.utils import make_parallel, model_save_wrapper, AdamSave
 from deform_conv.losses import *
 from deform_conv.nasnet import *
 # from keras.layers import GlobalAveragePooling2D, Dropout, Dense, Flatten
@@ -44,7 +44,7 @@ img_size = 200
 class_num = 6
 batch_size = 32 * GPU_NUM
 # batch_size = 160 * GPU_NUM #  65*65 img
-n_train = (88000 + 0) * 1  # Currenly using 200*200 & mtcnn 65*65 dataset
+n_train = (90000 + 0) * 1  # Currenly using 200*200 & mtcnn 65*65 dataset
 # n_train = batch_size * 10
 steps_per_epoch = int(np.ceil(n_train / batch_size))
 validation_steps = 4000 // batch_size
@@ -65,10 +65,17 @@ def crop_wrap(generator):
 
 
 dataset = NPZ_gen(
-    './face_age_dataset', class_num, batch_size, 1000,
+    'face_age_dataset', class_num, batch_size, 1000,
     dataset_size=n_train, flip=True, hierarchy_onehot=False,
-    random_scale=None, random_crop=0.25, random_resize=None, random_noise=None, random_gamma=0.6,
+    random_scale=None, random_crop=0.2, random_resize=None, random_noise=None, random_gamma=0.4,
 )
+
+# img_data = ImageDataGenerator()
+# test_scaled_gen = img_data.flow_from_directory(
+#     '../../face_age_ikeaval_0116',
+#     target_size=[img_size, img_size],
+#     batch_size=batch_size
+# )
 
 train_scaled_gen = dataset.get_some()
 test_scaled_gen = dataset.get_val(num_batch=validation_steps)
@@ -83,13 +90,11 @@ with tf.Session(config=config) as sess:
         # ---
         # Deformable CNN
         inputs, outputs = get_large_deform_cnn(class_num, trainable=True)
-        # inputs, outputs = NASNet(class_num, trainable=True, img_size=200)
         model = Model(inputs=inputs, outputs=outputs)
-        # print(colored("[model_inputs]", color='green'), inputs)
-        # print(colored("[model_outputs]", color='green'), outputs)
+        print(colored("[model_inputs]", color='green'), inputs)
+        print(colored("[model_outputs]", color='green'), outputs)
 
-        # model = NASNetMobile(input_shape=(200, 200, 3), classes=6, include_top=False)
-        # model = Model(inputs=model.inputs, outputs=[x])
+        # model = NASNetMobile(include_top=False, input_shape=(200,200,3), classes=6)
 
         model.summary()
 
@@ -145,7 +150,7 @@ with tf.Session(config=config) as sess:
                 img_files = [os.listdir(d) for d in class_dir]
 
                 val_loss, val_acc = model.evaluate_generator(
-                    crop_wrap(img_gen), steps=sum(map(lambda x: len(x), img_files)) // batch_size
+                    img_gen, steps=sum(map(lambda x: len(x), img_files)) // batch_size
                 )
 
                 print('val_loss:', val_loss)

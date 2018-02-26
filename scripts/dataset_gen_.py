@@ -9,7 +9,7 @@ import sys
 
 from queue import Queue
 from PIL import Image
-from skimage.transform import resize
+from skimage import transform
 from skimage import util
 from skimage import filters
 from skimage import exposure
@@ -43,15 +43,19 @@ def threadsafe_generator(f):
 
 class NPZ_gen:
     def __init__(self, dataset_dir, class_num, batch_size, epoch, dataset_size=None,
-                 soft_onehot=True, hierarchy_onehot=False, gate=False, flip=True,
+                 soft_onehot=True, hierarchy_onehot=False, gate=False, flip=True, resize=None,
                  random_scale=None, random_resize=None, random_crop=None, random_noise=None, random_blur=False, random_gamma=None):
 
         # assert random_scale < .5 and random_scale > .0
         # assert random_resize < .5 and random_scale > .0
         # assert random_crop < .4 and random_crop > .0
-        # assert random_noise < .05 and random_noise > .001
+        if random_noise is not None:
+            assert random_noise < .05 and random_noise > .001
+        if resize is not None:
+            assert type(resize) is int
 
         self.data_preprocess = {
+            'resize': resize,
             'soft_onehot': soft_onehot,
             'flip': flip,
             'random_scale': random_scale,
@@ -68,7 +72,7 @@ class NPZ_gen:
 
         if len(self.datas) == 0:
             raise ValueError("Can't find any npz data inside folder: %s" % dataset_dir)
-        elif len(self.val_datas) == 0:
+        elif len(self.val_datas) == 0 and False:
             raise ValueError("Can't find any npz Validate data inside folder: %s" % dataset_dir)
         else:
             # shuffle order of dataset except validation set(last npz).
@@ -194,7 +198,7 @@ class NPZ_gen:
         # random.shuffle(keys)
 
         if num_batch > val_size // self.batch_size:
-            print("You can  have more than %d batch!" % val_size // self.batch_size)
+            print("You can  have more than %d batch!" % (val_size // self.batch_size))
 
         pick_group = random.sample(range(0, val_size - self.batch_size, self.batch_size), num_batch)
 
@@ -211,6 +215,7 @@ class NPZ_gen:
                     soft_onehot=self.data_preprocess['soft_onehot'],
                     hierarchy_onehot=self.data_preprocess['hierarchy_onehot'],
                     gate=self.data_preprocess['gate'],
+                    resize=self.data_preprocess['resize'],
                 )
                 yield imgs, lab
 
@@ -233,6 +238,7 @@ class NPZ_gen:
 
         keras_model = args['keras_model']
         flip = args['flip']
+        resize = args['resize']
 
         random_scale = args['random_scale']
         random_crop = args['random_crop']
@@ -265,7 +271,7 @@ class NPZ_gen:
 
         if random_resize:
             new_size = int(new_size_scale * img_fp.shape[0])
-            img_fp = resize(img_fp, [new_size, new_size, 3], preserve_range=True)
+            img_fp = transform.resize(img_fp, [new_size, new_size, 3], preserve_range=True)
 
         if random_crop:
             h, w, c = img_fp.shape
@@ -292,13 +298,16 @@ class NPZ_gen:
             img_fp = img_fp * 255. if keras_model else img_fp
             img_fp = img_fp.clip(min=0, max=255) if keras_model else img_fp.clip(min=0, max=1)
 
+        if resize:
+            img_fp = transform.resize(img_fp, [resize, resize, 3], preserve_range=True)
+
         img_onehot = np.zeros([class_num])
 
         # img_onehot[tar_id] = 1  # int
         """
         onehot
         """
-        if tar_id > 0 and tar_id < class_num:
+        if tar_id >= 0 and tar_id < class_num:
             if soft_onehot:
                 delta1 = (random.random() - 0.5) * 2 * 0.1 if False else 0
                 delta2 = (random.random() - 0.5) * 2 * 0.1 if False else 0
@@ -336,8 +345,8 @@ class NPZ_gen:
 
         return img_fp, img_onehot
 
-    def _process_data(self, npz, range_a, range_b, keys, parallel, flip=False, soft_onehot=True, hierarchy_onehot=False, gate=False,
-                      keras_model=True, random_scale=None, random_resize=None, random_crop=None, random_noise=None, random_blur=False, random_gamma=False):
+    def _process_data(self, npz, range_a, range_b, keys, parallel, resize=None, flip=False, soft_onehot=True, hierarchy_onehot=False, gate=False,
+                      keras_model=False, random_scale=None, random_resize=None, random_crop=None, random_noise=None, random_blur=False, random_gamma=False):
         # keys = list(npz.keys())
         input_vec = []
         output_vec = []
@@ -359,6 +368,7 @@ class NPZ_gen:
 
         args = {
             'flip': flip,
+            'resize': resize,
             'soft_onehot': soft_onehot,
             'hierarchy_onehot': hierarchy_onehot,
             'gate': gate,
@@ -393,6 +403,13 @@ class NPZ_gen:
             return np.array(input_vec), [np.array(multi_output_vec[0]), np.array(multi_output_vec[1])]
         else:
             return np.array(input_vec), np.array(output_vec)
+
+class NPZ_class_id(NPZ_gen):
+     def _process_data(self, *args, **kwargs):
+        X, Y = super(NPZ_class_id, self)._process_data(*args, **kwargs)
+        dummy_target = np.zeros([self.batch_size, 256])
+        label_id_vec = Y.argmax(axis=1)
+        return [X, np.array(label_id_vec)], [Y, np.array(dummy_target)]
 
 if __name__ == "__main__":
     i = 0

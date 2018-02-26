@@ -24,7 +24,7 @@ args = parser.parse_args()
 class_num = int(args.class_num) if args.class_num is not None else 6
 
 K.set_learning_phase(0)
-inputs, outputs = get_large_res_deform_cnn2(class_num, trainable=True)
+inputs, outputs = get_large_deform_cnn(class_num, trainable=True)
 # inputs, outputs = get_large_deform_cnn(class_num, trainable=True)
 model = Model(inputs=inputs, outputs=outputs)
 

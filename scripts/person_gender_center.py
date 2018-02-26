@@ -36,13 +36,13 @@ GPU_NUM = 3
 GPU = args.gpu
 
 img_size = 200
-class_num = 6
-batch_size = 64 * GPU_NUM
+class_num = 2
+batch_size = 32 * GPU_NUM
 # batch_size = 160 * GPU_NUM #  65*65 img
-n_train = (60000) * 1  # Currenly using 200*200 & mtcnn 65*65 dataset
+n_train = (73152) * 1  # Currenly using 200*200 & mtcnn 65*65 dataset
 # n_train = 300
 steps_per_epoch = int(np.ceil(n_train / batch_size))
-validation_steps = 5000 // batch_size
+validation_steps = 3000 // batch_size
 
 
 def val_wrapper(generator):
@@ -51,22 +51,13 @@ def val_wrapper(generator):
         batch_center = np.zeros([x.shape[0], 256])
         yield [x, batch_class_id], [y, batch_center]
 
-
 dataset = NPZ_class_id(
-    'face_age_dataset', class_num, batch_size, 1000,
-    dataset_size=n_train, flip=True, hierarchy_onehot=False, resize=200,
-    random_scale=None, random_crop=0.2, random_resize=None, random_noise=None, random_gamma=0.2,
+    './person_gender_ikea', class_num, batch_size, 1000,
+    dataset_size=n_train, flip=True, hierarchy_onehot=False, soft_onehot=False,
+    random_scale=0.1, random_crop=0.1, random_resize=None, random_noise=None,
 )
-# dataset = NPZ_class_id('./face_age_dataset', class_num, batch_size, 1000, dataset_size=n_train)
-train_scaled_gen = dataset.get_some()
-test_scaled_gen = dataset.get_val(num_batch=validation_steps)
-img_data = ImageDataGenerator(rescale=1./255)
-# test_scaled_gen = img_data.flow_from_directory(
-#     '../../face_age_ikeaval_0116',
-#     target_size=[img_size, img_size],
-#     batch_size=batch_size
-# )
-# test_scaled_gen = val_wrapper(test_scaled_gen)
+train_gen = dataset.get_some()
+val_gen = dataset.get_val(num_batch=validation_steps)
 
 config = tf.ConfigProto()
 config.gpu_options.allow_growth = True
@@ -89,26 +80,26 @@ with tf.Session(config=config) as sess:
     # model._weights('../models/deform_cnn.h5')
 
     model.compile(optim, loss=[loss, lambda y_true, y_pred: K.sum(y_pred)], loss_weights=[1., .001], metrics={'output': 'accuracy'})
-    checkpoint = ModelCheckpoint("deform_center_best.h5", monitor='val_output_acc', save_best_only=True)
-    checkpoint_tl = ModelCheckpoint("deform_center_trainbest.h5", monitor='output_loss', save_best_only=True)
+    checkpoint = ModelCheckpoint("pg_center_best.h5", monitor='val_output_acc', save_best_only=True)
+    checkpoint_tl = ModelCheckpoint("pg_center_trainbest.h5", monitor='output_loss', save_best_only=True)
     spreadsheet = SpreadSheet("1nu6AFqzeYc2rNFAjtUtem-CFYKiRI4HCmXkxWsGglRg", "DeformFaceAgeML3")
 
     if args.img_dir is None:
         try:
             model.fit_generator(
-                train_scaled_gen, steps_per_epoch=steps_per_epoch,
+                train_gen, steps_per_epoch=steps_per_epoch,
                 epochs=1000, verbose=1,
-                validation_data=test_scaled_gen, validation_steps=validation_steps,
+                validation_data=val_gen, validation_steps=validation_steps,
                 callbacks=[checkpoint, checkpoint_tl],
             )
 
             val_loss, val_acc = model.evaluate_generator(
-                test_scaled_gen, steps=validation_steps
+                val_gen, steps=validation_steps
             )
 
             print('Test accuracy of deformable convolution with scaled images', val_acc)
         except KeyboardInterrupt:
-            model.save_weights('deform_center_interrupt.h5')
+            model.save_weights('pg_center_interrupt.h5')
     else:
         if True:
             img_data = ImageDataGenerator(rescale=1./255)
@@ -126,11 +117,8 @@ with tf.Session(config=config) as sess:
                 img_gen, steps=sum(map(lambda x: len(x), img_files)) // batch_size
             )
 
-            print('val_loss:', val_loss)
-            print('val_acc:', val_acc)
-
-            print('val_loss2:', v2_l)
-            print('val_acc2:', v2_a)
+            print('val_loss:', v2_l)
+            print('val_acc:', v2_a)
         else:
             img_dir = [os.path.join(args.img_dir, d) for d in os.listdir(args.img_dir) if not os.path.isdir(os.path.join(args.img_dir, d))]
             inputs = []

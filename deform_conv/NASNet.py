@@ -1,801 +1,298 @@
-"""NASNet-A models for Keras
+from __future__ import absolute_import, division
 
-NASNet refers to Neural Architecture Search Network, a family of models
-that were designed automatically by learning the model architectures
-directly on the dataset of interest.
-
-Here we consider NASNet-A, the highest performance model that was found
-for the CIFAR-10 dataset, and then extended to ImageNet 2012 dataset,
-obtaining state of the art performance on CIFAR-10 and ImageNet 2012.
-Only the NASNet-A models, and their respective weights, which are suited
-for ImageNet 2012 are provided.
-
-The below table describes the performance on ImageNet 2012:
-------------------------------------------------------------------------------------
-      Architecture       | Top-1 Acc | Top-5 Acc |  Multiply-Adds |  Params (M)
-------------------------------------------------------------------------------------
-|   NASNet-A (4 @ 1056)  |   74.0 %  |   91.6 %  |       564 M    |     5.3        |
-|   NASNet-A (6 @ 4032)  |   82.7 %  |   96.2 %  |      23.8 B    |    88.9        |
-------------------------------------------------------------------------------------
-
-Weights obtained from the official Tensorflow repository found at
-https://github.com/tensorflow/models/tree/master/research/slim/nets/nasnet
-
-# References:
- - [Learning Transferable Architectures for Scalable Image Recognition]
-    (https://arxiv.org/abs/1707.07012)
-
-Based on the following implementations:
- - [TF Slim Implementation]
-   (https://github.com/tensorflow/models/blob/master/research/slim/nets/nasnet/nasnet.)
- - [TensorNets implementation]
-   (https://github.com/taehoonlee/tensornets/blob/master/tensornets/nasnets.py)
-"""
-from __future__ import print_function
-from __future__ import absolute_import
-from __future__ import division
-
-import warnings
-
+import keras as K
+from keras.layers import (
+    Input,
+    Conv2D,
+    SeparableConv2D,
+    Activation,
+    GlobalAvgPool2D,
+    Dense,
+    BatchNormalization,
+    MaxPooling2D,
+    AveragePooling2D,
+    GlobalAveragePooling2D,
+    ZeroPadding2D,
+    Flatten,
+    Embedding,
+    Lambda,
+    Cropping2D,
+)
+from keras.layers.merge import concatenate, Add
 from keras.models import Model
-from keras.layers import Input
-from keras.layers import Activation
-from keras.layers import Dense
-from keras.layers import Dropout
-from keras.layers import BatchNormalization
-from keras.layers import MaxPooling2D
-from keras.layers import AveragePooling2D
-from keras.layers import GlobalAveragePooling2D
-from keras.layers import GlobalMaxPooling2D
-from keras.layers import Conv2D
-from keras.layers import SeparableConv2D
-from keras.layers import ZeroPadding2D
-from keras.layers import Cropping2D
-from keras.layers import concatenate
-from keras.layers import add
-from keras.regularizers import l2
-from keras.utils.data_utils import get_file
-from keras.engine.topology import get_source_inputs
-from keras.applications.imagenet_utils import _obtain_input_shape
-from keras.applications.inception_v3 import preprocess_input
-from keras.applications.imagenet_utils import decode_predictions
-from keras import backend as K
-
 from deform_conv.layers import *
+from deform_conv.utils import make_parallel
 
-_BN_DECAY = 0.9997
-_BN_EPSILON = 1e-3
+from keras.initializers import Orthogonal, lecun_normal
 
-NASNET_MOBILE_WEIGHT_PATH = "https://github.com/titu1994/Keras-NASNet/releases/download/v1.0/NASNet-mobile.h5"
-NASNET_MOBILE_WEIGHT_PATH_NO_TOP = "https://github.com/titu1994/Keras-NASNet/releases/download/v1.0/NASNet-mobile-no-top.h5"
-NASNET_MOBILE_WEIGHT_PATH_WITH_AUXULARY = "https://github.com/titu1994/Keras-NASNet/releases/download/v1.0/NASNet-auxiliary-mobile.h5"
-NASNET_MOBILE_WEIGHT_PATH_WITH_AUXULARY_NO_TOP = "https://github.com/titu1994/Keras-NASNet/releases/download/v1.0/NASNet-auxiliary-mobile-no-top.h5"
-NASNET_LARGE_WEIGHT_PATH = "https://github.com/titu1994/Keras-NASNet/releases/download/v1.1/NASNet-large.h5"
-NASNET_LARGE_WEIGHT_PATH_NO_TOP = "https://github.com/titu1994/Keras-NASNet/releases/download/v1.1/NASNet-large-no-top.h5"
-NASNET_LARGE_WEIGHT_PATH_WITH_auxiliary = "https://github.com/titu1994/Keras-NASNet/releases/download/v1.1/NASNet-auxiliary-large.h5"
-NASNET_LARGE_WEIGHT_PATH_WITH_auxiliary_NO_TOP = "https://github.com/titu1994/Keras-NASNet/releases/download/v1.1/NASNet-auxiliary-large-no-top.h5"
+def NASNet(class_num, trainable=True, img_size=200):
+    def _adjust_block(p, ip, filters, weight_decay=5e-5, id=None):
+        '''
+        Adjusts the input `p` to match the shape of the `input`
+        or situations where the output number of filters needs to
+        be changed
+
+        # Arguments:
+            p: input tensor which needs to be modified
+            ip: input tensor whose shape needs to be matched
+            filters: number of output filters to be matched
+            weight_decay: l2 regularization weight
+            id: string id
+
+        # Returns:
+            an adjusted Keras tensor
+        '''
+        channel_dim = 1 if K.image_data_format() == 'channels_first' else -1
+        img_dim = 2 if K.image_data_format() == 'channels_first' else -2
+
+        with K.name_scope('adjust_block'):
+            if p is None:
+                p = ip
+
+            elif p._keras_shape[img_dim] != ip._keras_shape[img_dim]:
+                with K.name_scope('adjust_reduction_block_%s' % id):
+                    p = Activation('relu', name='adjust_relu_1_%s' % id)(p)
+
+                    p1 = AveragePooling2D((1, 1), strides=(2, 2), padding='valid', name='adjust_avg_pool_1_%s' % id)(p)
+                    p1 = Conv2D(filters // 2, (1, 1), padding='same', use_bias=False, kernel_regularizer=OrthLocalReg2D,
+                                name='adjust_conv_1_%s' % id, kernel_initializer='he_normal')(p1)
+
+                    p2 = ZeroPadding2D(padding=((0, 1), (0, 1)))(p)
+                    p2 = Cropping2D(cropping=((1, 0), (1, 0)))(p2)
+                    p2 = AveragePooling2D((1, 1), strides=(2, 2), padding='valid', name='adjust_avg_pool_2_%s' % id)(p2)
+                    p2 = Conv2D(filters // 2, (1, 1), padding='same', use_bias=False, kernel_regularizer=OrthLocalReg2D,
+                                name='adjust_conv_2_%s' % id, kernel_initializer='he_normal')(p2)
+
+                    p = concatenate([p1, p2], axis=channel_dim)
+                    p = BatchNormalization(name='adjust_bn_%s' % id)(p)
+
+            elif p._keras_shape[channel_dim] != filters:
+                with K.name_scope('adjust_projection_block_%s' % id):
+                    p = Activation('relu')(p)
+                    p = Conv2D(filters, (1, 1), strides=(1, 1), padding='same', name='adjust_conv_projection_%s' % id,
+                               use_bias=False, kernel_regularizer=OrthLocalReg2D, kernel_initializer='he_normal')(p)
+                    p = BatchNormalization(name='adjust_bn_%s' % id)(p)
+        return p
 
 
-def NASNet(input_shape=None,
-           penultimate_filters=4032,
-           nb_blocks=6,
-           stem_filters=96,
-           skip_reduction=True,
-           use_auxiliary_branch=False,
-           filters_multiplier=2,
-           dropout=0.5,
-           weight_decay=5e-5,
-           include_top=True,
-           weights=None,
-           input_tensor=None,
-           pooling=None,
-           classes=1000,
-           default_size=None):
-    """Instantiates a NASNet architecture.
-    Note that only TensorFlow is supported for now,
-    therefore it only works with the data format
-    `image_data_format='channels_last'` in your Keras config
-    at `~/.keras/keras.json`.
+    def NormalCell(hi, h_i1sub, filter_i, filter_o, stride=1, name="NAS", use_deform=False, is_tail=False):
+        """
+        adjust feature size & channel size
+        """
 
-    # Arguments
-        input_shape: optional shape tuple, only to be specified
-            if `include_top` is False (otherwise the input shape
-            has to be `(331, 331, 3)` for NASNetLarge or
-            `(224, 224, 3)` for NASNetMobile
-            It should have exactly 3 inputs channels,
-            and width and height should be no smaller than 32.
-            E.g. `(224, 224, 3)` would be one valid value.
-        penultimate_filters: number of filters in the penultimate layer.
-            NASNet models use the notation `NASNet (N @ P)`, where:
-                -   N is the number of blocks
-                -   P is the number of penultimate filters
-        nb_blocks: number of repeated blocks of the NASNet model.
-            NASNet models use the notation `NASNet (N @ P)`, where:
-                -   N is the number of blocks
-                -   P is the number of penultimate filters
-        stem_filters: number of filters in the initial stem block
-        skip_reduction: Whether to skip the reduction step at the tail
-            end of the network. Set to `False` for CIFAR models.
-        use_auxiliary_branch: Whether to use the auxiliary branch during
-            training or evaluation.
-        filters_multiplier: controls the width of the network.
-            - If `filters_multiplier` < 1.0, proportionally decreases the number
-                of filters in each layer.
-            - If `filters_multiplier` > 1.0, proportionally increases the number
-                of filters in each layer.
-            - If `filters_multiplier` = 1, default number of filters from the paper
-                 are used at each layer.
-        dropout: dropout rate
-        weight_decay: l2 regularization weight
-        include_top: whether to include the fully-connected
-            layer at the top of the network.
-        weights: `None` (random initialization) or
-            `imagenet` (ImageNet weights)
-        input_tensor: optional Keras tensor (i.e. output of
-            `layers.Input()`)
-            to use as image input for the model.
-        pooling: Optional pooling mode for feature extraction
-            when `include_top` is `False`.
-            - `None` means that the output of the model
-                will be the 4D tensor output of the
-                last convolutional layer.
-            - `avg` means that global average pooling
-                will be applied to the output of the
-                last convolutional layer, and thus
-                the output of the model will be a
-                2D tensor.
-            - `max` means that global max pooling will
-                be applied.
-        classes: optional number of classes to classify images
-            into, only to be specified if `include_top` is True, and
-            if no `weights` argument is specified.
-        default_size: specifies the default image size of the model
-    # Returns
-        A Keras model instance.
-    # Raises
-        ValueError: in case of invalid argument for `weights`,
-            or invalid input shape.
-        RuntimeError: If attempting to run this model with a
-            backend that does not support separable convolutions.
-    """
-    if K.backend() != 'tensorflow':
-        raise RuntimeError('Only Tensorflow backend is currently supported, '
-                           'as other backends do not support '
-                           'separable convolution.')
+        hi = Conv2D(filter_o, (1, 1), padding='same', name='%s_hi_align' % name, trainable=trainable, kernel_regularizer=OrthLocalReg2D)(hi)
+        hi = Activation('relu', name='%s_hi_align_relu' % name)(hi)
+        hi = BatchNormalization(name='%s_hi_align_bn' % name)(hi)
 
-    if weights not in {'imagenet', None}:
-        raise ValueError('The `weights` argument should be either '
-                         '`None` (random initialization) or `imagenet` '
-                         '(pre-training on ImageNet).')
+        if use_deform:
+            hi = SepConvOffset2D(filter_o, name='%s_deform_conv' % name)(hi, use_resam=True)
 
-    if weights == 'imagenet' and include_top and classes != 1000:
-        raise ValueError('If using `weights` as ImageNet with `include_top` '
-                         'as true, `classes` should be 1000')
+        h_i1sub = _adjust_block(h_i1sub, hi, filter_o, 0, name)
 
-    if default_size is None:
-        default_size = 331
+        """
+        SubLayer
+        """
 
-    # Determine proper input shape and default size.
-    input_shape = _obtain_input_shape(input_shape,
-                                      default_size=default_size,
-                                      min_size=32,
-                                      data_format=K.image_data_format(),
-                                      require_flatten=include_top or weights)
-    # input_shape = (None, None, 3)
+        l = SeparableConv2D(filter_o, (3, 3), padding='same', name='%s_sep3x3_1' % name, trainable=trainable, depthwise_regularizer=OrthLocalRegSep2D)(hi)
+        l = Activation('relu', name='%s_sep3x3_1_relu' % name)(l)
+        l = BatchNormalization(name='%s_sep3x3_1_bn' % name)(l)
 
-    conv_regularizer = l2(weight_decay) if False else OrthLocalReg2D
-    sep_conv_regularizer = l2(weight_decay) if False else OrthLocalRegSep2D
+        add1 = Add()([l, hi])
 
-    if K.image_data_format() != 'channels_last':
-        warnings.warn('The NASNet family of models is only available '
-                      'for the input data format "channels_last" '
-                      '(width, height, channels). '
-                      'However your settings specify the default '
-                      'data format "channels_first" (channels, width, height).'
-                      ' You should set `image_data_format="channels_last"` '
-                      'in your Keras config located at ~/.keras/keras.json. '
-                      'The model being returned right now will expect inputs '
-                      'to follow the "channels_last" data format.')
-        K.set_image_data_format('channels_last')
-        old_data_format = 'channels_first'
-    else:
-        old_data_format = None
+        l = SeparableConv2D(filter_o, (5, 5), padding='same', name='%s_sep5x5_1' % name, trainable=trainable, depthwise_regularizer=OrthLocalRegSep2D)(hi)
+        l = Activation('relu', name='%s_sep5x5_1_relu' % name)(l)
+        l = BatchNormalization(name='%s_sep5x5_1_bn' % name)(l)
 
-    if input_tensor is None:
-        img_input = Input(shape=input_shape)
-    else:
-        if not K.is_keras_tensor(input_tensor):
-            img_input = Input(tensor=input_tensor, shape=input_shape)
+        if h_i1sub is not None:
+            l_1sub = SeparableConv2D(filter_o, (3, 3), padding='same', name='%s_sep3x3_sub_1' % name, trainable=trainable, depthwise_regularizer=OrthLocalRegSep2D)(h_i1sub)
+            l_1sub = Activation('relu', name='%s_sep3x3_sub_1_relu' % name)(l_1sub)
+            l_1sub = BatchNormalization(name='%s_sep3x3_sub_1_bn' % name)(l_1sub)
+            add2 = Add()([l, l_1sub])
         else:
-            img_input = input_tensor
+            add2 = l
 
-    assert penultimate_filters % 24 == 0, "`penultimate_filters` needs to be divisible " \
-                                          "by 24."
+        l = SeparableConv2D(filter_o, (3, 3), padding='same', name='%s_sep3x3_2' % name, trainable=trainable, depthwise_regularizer=OrthLocalRegSep2D)(hi)
+        l = Activation('relu', name='%s_sep3x3_2_relu' % name)(l)
+        l = BatchNormalization(name='%s_sep3x3_2_bn' % name)(l)
 
-    channel_dim = 1 if K.image_data_format() == 'channels_first' else -1
-    filters = penultimate_filters // 24
-
-    if not skip_reduction:
-        x = Conv2D(stem_filters, (3, 3), strides=(2, 2), padding='valid', use_bias=False, name='stem_conv1',
-                   kernel_initializer='he_normal', kernel_regularizer=conv_regularizer)(img_input)
-        x2 = InvConv2D(stem_filters, (3, 3), strides=(2, 2), padding='valid', use_bias=False, name='stem_inv_conv1',
-                   kernel_initializer='he_normal', kernel_regularizer=conv_regularizer)(img_input)
-        x = concatenate([x, x2])
-        x = Conv2D(stem_filters, (3, 3), strides=(1, 1), padding='valid', use_bias=False, name='stem_conv_nin',
-                   kernel_initializer='he_normal', kernel_regularizer=conv_regularizer)(x)
-    else:
-        x = Conv2D(stem_filters, (3, 3), strides=(1, 1), padding='same', use_bias=False, name='stem_conv1',
-                   kernel_initializer='he_normal', kernel_regularizer=conv_regularizer)(img_input)
-
-    x = BatchNormalization(axis=channel_dim, momentum=_BN_DECAY, epsilon=_BN_EPSILON,
-                           name='stem_bn1')(x)
-
-    p = None
-    if not skip_reduction:  # imagenet / mobile mode
-        x, p = _reduction_A(x, p, filters // (filters_multiplier ** 2), weight_decay, id='stem_1')
-        x, p = _reduction_A(x, p, filters // filters_multiplier, weight_decay, id='stem_2')
-
-    for i in range(nb_blocks):
-        use_deform = (i == 0)
-        x, p = _normal_A(x, p, filters, weight_decay, id='%d' % (i), deform=use_deform, reguliarizer=conv_regularizer)
-
-    x, p0 = _reduction_A(x, p, filters * filters_multiplier, weight_decay, id='reduce_%d' % (nb_blocks))
-
-    p = p0 if not skip_reduction else p
-
-    for i in range(nb_blocks):
-        x, p = _normal_A(x, p, filters * filters_multiplier, weight_decay, id='%d' % (nb_blocks + i + 1), reguliarizer=conv_regularizer)
-
-    auxiliary_x = None
-    if not skip_reduction:  # imagenet / mobile mode
-        if use_auxiliary_branch:
-            auxiliary_x = _add_auxiliary_head(x, classes, weight_decay)
-
-    x, p0 = _reduction_A(x, p, filters * filters_multiplier ** 2, weight_decay, id='reduce_%d' % (2 * nb_blocks))
-
-    if skip_reduction:  # CIFAR mode
-        if use_auxiliary_branch:
-            auxiliary_x = _add_auxiliary_head(x, classes, weight_decay)
-
-    p = p0 if not skip_reduction else p
-
-    for i in range(nb_blocks):
-        use_deform = (i == 0)
-        x, p = _normal_A(x, p, filters * filters_multiplier ** 2, weight_decay, id='%d' % (2 * nb_blocks + i + 1), deform=use_deform, reguliarizer=conv_regularizer)
-
-    x = Activation('relu')(x)
-
-    if include_top:
-        x = GlobalAveragePooling2D()(x)
-        x = Dropout(dropout)(x)
-        x = Dense(classes, activation='softmax', kernel_regularizer=l2(weight_decay), name='predictions')(x)
-    else:
-        if pooling == 'avg':
-            x = GlobalAveragePooling2D()(x)
-        elif pooling == 'max':
-            x = GlobalMaxPooling2D()(x)
-
-    # Ensure that the model takes into account
-    # any potential predecessors of `input_tensor`.
-    if input_tensor is not None:
-        inputs = get_source_inputs(input_tensor)
-    else:
-        inputs = img_input
-
-    # Create model.
-    if use_auxiliary_branch:
-        model = Model(inputs, [x, auxiliary_x], name='NASNet_with_auxiliary')
-    else:
-        model = Model(inputs, x, name='NASNet')
-
-    # load weights
-    if weights == 'imagenet':
-        if default_size == 224:  # mobile version
-            if include_top:
-                if use_auxiliary_branch:
-                    weight_path = NASNET_MOBILE_WEIGHT_PATH_WITH_AUXULARY
-                    model_name = 'nasnet_mobile_with_aux.h5'
-                else:
-                    weight_path = NASNET_MOBILE_WEIGHT_PATH
-                    model_name = 'nasnet_mobile.h5'
-            else:
-                if use_auxiliary_branch:
-                    weight_path = NASNET_MOBILE_WEIGHT_PATH_WITH_AUXULARY_NO_TOP
-                    model_name = 'nasnet_mobile_with_aux_no_top.h5'
-                else:
-                    weight_path = NASNET_MOBILE_WEIGHT_PATH_NO_TOP
-                    model_name = 'nasnet_mobile_no_top.h5'
-
-            weights_file = get_file(model_name, weight_path, cache_subdir='models')
-            model.load_weights(weights_file, by_name=True)
-
-        elif default_size == 331:  # large version
-            if include_top:
-                if use_auxiliary_branch:
-                    weight_path = NASNET_LARGE_WEIGHT_PATH_WITH_auxiliary
-                    model_name = 'nasnet_large_with_aux.h5'
-                else:
-                    weight_path = NASNET_LARGE_WEIGHT_PATH
-                    model_name = 'nasnet_large.h5'
-            else:
-                if use_auxiliary_branch:
-                    weight_path = NASNET_LARGE_WEIGHT_PATH_WITH_auxiliary_NO_TOP
-                    model_name = 'nasnet_large_with_aux_no_top.h5'
-                else:
-                    weight_path = NASNET_LARGE_WEIGHT_PATH_NO_TOP
-                    model_name = 'nasnet_large_no_top.h5'
-
-            weights_file = get_file(model_name, weight_path, cache_subdir='models')
-            model.load_weights(weights_file, by_name=True)
-
+        if h_i1sub is not None:
+            l_1sub = SeparableConv2D(filter_o, (5, 5), padding='same', name='%s_sep5x5_sub_1' % name, trainable=trainable, depthwise_regularizer=OrthLocalRegSep2D)(h_i1sub)
+            l_1sub = Activation('relu', name='%s_sep5x5_sub_1_relu' % name)(l_1sub)
+            l_1sub = BatchNormalization(name='%s_sep5x5_sub_1_bn' % name)(l_1sub)
+            add3 = Add()([l, l_1sub])
         else:
-            raise ValueError('ImageNet weights can only be loaded on NASNetLarge or NASNetMobile')
-
-    if old_data_format:
-        K.set_image_data_format(old_data_format)
-
-    return model
-
-
-def NASNetLarge(input_shape=(331, 331, 3),
-                dropout=0.5,
-                weight_decay=5e-5,
-                use_auxiliary_branch=False,
-                include_top=True,
-                weights='imagenet',
-                input_tensor=None,
-                pooling=None,
-                classes=1000):
-
-    global _BN_DECAY, _BN_EPSILON
-    _BN_DECAY = 0.9997
-    _BN_EPSILON = 1e-3
-
-    model = NASNet(input_shape,
-                  penultimate_filters=4032,
-                  nb_blocks=6,
-                  stem_filters=96,
-                  skip_reduction=False,
-                  use_auxiliary_branch=use_auxiliary_branch,
-                  filters_multiplier=2,
-                  dropout=dropout,
-                  weight_decay=weight_decay,
-                  include_top=include_top,
-                  weights=weights,
-                  input_tensor=input_tensor,
-                  pooling=pooling,
-                  classes=classes,
-                  default_size=331)
-
-    if not include_top:
-        # x = Flatten()(model.layers[-1].output)
-        x = GlobalAveragePooling2D()(model.layers[-1].output)
-        x = Dropout(0.5)(x)
-        x = Dense(512, activation='relu', kernel_regularizer=l2(5e-5))(x)
-        x = Dropout(0.5)(x)
-        x = Dense(128, activation='relu', kernel_regularizer=l2(5e-5))(x)
-        x = Dense(classes, activation='softmax', kernel_regularizer=l2(5e-5), name='predictions')(x)
-        model = Model(inputs=model.inputs, outputs=[x])
-    return model
-
-
-def NASNetMobile(input_shape=(224, 224, 3),
-                 dropout=0.5,
-                 weight_decay=4e-5,
-                 use_auxiliary_branch=False,
-                 include_top=True,
-                 weights='imagenet',
-                 input_tensor=None,
-                 pooling=None,
-                 classes=1000):
-    """Instantiates a NASNet architecture in Mobile ImageNet mode.
-    Note that only TensorFlow is supported for now,
-    therefore it only works with the data format
-    `image_data_format='channels_last'` in your Keras config
-    at `~/.keras/keras.json`.
-
-    # Arguments
-        input_shape: optional shape tuple, only to be specified
-            if `include_top` is False (otherwise the input shape
-            has to be `(224, 224, 3)` for NASNetMobile
-            It should have exactly 3 inputs channels,
-            and width and height should be no smaller than 32.
-            E.g. `(224, 224, 3)` would be one valid value.
-        use_auxiliary_branch: Whether to use the auxiliary branch during
-            training or evaluation.
-        dropout: dropout rate
-        weight_decay: l2 regularization weight
-        include_top: whether to include the fully-connected
-            layer at the top of the network.
-        weights: `None` (random initialization) or
-            `imagenet` (ImageNet weights)
-        input_tensor: optional Keras tensor (i.e. output of
-            `layers.Input()`)
-            to use as image input for the model.
-        pooling: Optional pooling mode for feature extraction
-            when `include_top` is `False`.
-            - `None` means that the output of the model
-                will be the 4D tensor output of the
-                last convolutional layer.
-            - `avg` means that global average pooling
-                will be applied to the output of the
-                last convolutional layer, and thus
-                the output of the model will be a
-                2D tensor.
-            - `max` means that global max pooling will
-                be applied.
-        classes: optional number of classes to classify images
-            into, only to be specified if `include_top` is True, and
-            if no `weights` argument is specified.
-        default_size: specifies the default image size of the model
-    # Returns
-        A Keras model instance.
-    # Raises
-        ValueError: in case of invalid argument for `weights`,
-            or invalid input shape.
-        RuntimeError: If attempting to run this model with a
-            backend that does not support separable convolutions.
-    """
-    global _BN_DECAY, _BN_EPSILON
-    _BN_DECAY = 0.9997
-    _BN_EPSILON = 1e-3
-
-    model = NASNet(input_shape,
-                  penultimate_filters=1056,
-                  nb_blocks=4,
-                  stem_filters=32,
-                  skip_reduction=False,
-                  use_auxiliary_branch=use_auxiliary_branch,
-                  filters_multiplier=2,
-                  dropout=dropout,
-                  weight_decay=weight_decay,
-                  include_top=include_top,
-                  weights=weights,
-                  input_tensor=input_tensor,
-                  pooling=pooling,
-                  classes=classes,
-                  default_size=224)
-
-    if not include_top:
-        # x = Flatten()(model.layers[-1].output)
-        x = GlobalAveragePooling2D()(model.layers[-1].output)
-        # x = Dropout(0.5)(x)
-        # x = Dense(512, activation='relu', kernel_regularizer=l2(5e-5))(x)
-        # x = Dropout(0.5)(x)
-        # x = Dense(128, activation='relu', kernel_regularizer=l2(5e-5))(x)
-        x = Dense(classes, activation='softmax', kernel_regularizer=l2(5e-5), name='predictions')(x)
-        model = Model(inputs=model.inputs, outputs=[x])
-    return model
-
-
-def NASNetCIFAR(input_shape=(32, 32, 3),
-                dropout=0.0,
-                weight_decay=5e-4,
-                use_auxiliary_branch=False,
-                include_top=True,
-                weights=None,
-                input_tensor=None,
-                pooling=None,
-                classes=10):
-    """Instantiates a NASNet architecture in CIFAR mode.
-    Note that only TensorFlow is supported for now,
-    therefore it only works with the data format
-    `image_data_format='channels_last'` in your Keras config
-    at `~/.keras/keras.json`.
-
-    # Arguments
-        input_shape: optional shape tuple, only to be specified
-            if `include_top` is False (otherwise the input shape
-            has to be `(32, 32, 3)` for NASNetMobile
-            It should have exactly 3 inputs channels,
-            and width and height should be no smaller than 32.
-            E.g. `(32, 32, 3)` would be one valid value.
-        use_auxiliary_branch: Whether to use the auxiliary branch during
-            training or evaluation.
-        dropout: dropout rate
-        weight_decay: l2 regularization weight
-        include_top: whether to include the fully-connected
-            layer at the top of the network.
-        weights: `None` (random initialization) or
-            `imagenet` (ImageNet weights)
-        input_tensor: optional Keras tensor (i.e. output of
-            `layers.Input()`)
-            to use as image input for the model.
-        pooling: Optional pooling mode for feature extraction
-            when `include_top` is `False`.
-            - `None` means that the output of the model
-                will be the 4D tensor output of the
-                last convolutional layer.
-            - `avg` means that global average pooling
-                will be applied to the output of the
-                last convolutional layer, and thus
-                the output of the model will be a
-                2D tensor.
-            - `max` means that global max pooling will
-                be applied.
-        classes: optional number of classes to classify images
-            into, only to be specified if `include_top` is True, and
-            if no `weights` argument is specified.
-        default_size: specifies the default image size of the model
-    # Returns
-        A Keras model instance.
-    # Raises
-        ValueError: in case of invalid argument for `weights`,
-            or invalid input shape.
-        RuntimeError: If attempting to run this model with a
-            backend that does not support separable convolutions.
-    """
-    global _BN_DECAY, _BN_EPSILON
-    _BN_DECAY = 0.9
-    _BN_EPSILON = 1e-5
-
-    return NASNet(input_shape,
-                  penultimate_filters=768,
-                  nb_blocks=6,
-                  stem_filters=32,
-                  skip_reduction=True,
-                  use_auxiliary_branch=use_auxiliary_branch,
-                  filters_multiplier=2,
-                  dropout=dropout,
-                  weight_decay=weight_decay,
-                  include_top=include_top,
-                  weights=weights,
-                  input_tensor=input_tensor,
-                  pooling=pooling,
-                  classes=classes,
-                  default_size=224)
-
-
-def _separable_conv_block(ip, filters, kernel_size=(3, 3), strides=(1, 1), weight_decay=5e-5, id=None, reguliarizer=None):
-    '''Adds 2 blocks of [relu-separable conv-batchnorm]
-
-    # Arguments:
-        ip: input tensor
-        filters: number of output filters per layer
-        kernel_size: kernel size of separable convolutions
-        strides: strided convolution for downsampling
-        weight_decay: l2 regularization weight
-        id: string id
-
-    # Returns:
-        a Keras tensor
-    '''
-    channel_dim = 1 if K.image_data_format() == 'channels_first' else -1
-
-    reguliarizer = l2(weight_decay) if reguliarizer is None else OrthLocalRegSep2D
-
-    with K.name_scope('separable_conv_block_%s' % id):
-        x = Activation('relu')(ip)
-        x = SeparableConv2D(filters, kernel_size, strides=strides, name='separable_conv_1_%s' % id,
-                            padding='same', use_bias=False, kernel_initializer='he_normal',
-                            kernel_regularizer=reguliarizer)(x)
-        x = BatchNormalization(axis=channel_dim, momentum=_BN_DECAY, epsilon=_BN_EPSILON,
-                               name="separable_conv_1_bn_%s" % (id))(x)
-        x = Activation('relu')(x)
-        x = SeparableConv2D(filters, kernel_size, name='separable_conv_2_%s' % id,
-                            padding='same', use_bias=False, kernel_initializer='he_normal',
-                            kernel_regularizer=reguliarizer)(x)
-        x = BatchNormalization(axis=channel_dim, momentum=_BN_DECAY, epsilon=_BN_EPSILON,
-                               name="separable_conv_2_bn_%s" % (id))(x)
-    return x
-
-
-def _adjust_block(p, ip, filters, weight_decay=5e-5, id=None):
-    '''
-    Adjusts the input `p` to match the shape of the `input`
-    or situations where the output number of filters needs to
-    be changed
-
-    # Arguments:
-        p: input tensor which needs to be modified
-        ip: input tensor whose shape needs to be matched
-        filters: number of output filters to be matched
-        weight_decay: l2 regularization weight
-        id: string id
-
-    # Returns:
-        an adjusted Keras tensor
-    '''
-    channel_dim = 1 if K.image_data_format() == 'channels_first' else -1
-    img_dim = 2 if K.image_data_format() == 'channels_first' else -2
-
-    with K.name_scope('adjust_block'):
-        if p is None:
-            p = ip
-
-        elif p._keras_shape[img_dim] != ip._keras_shape[img_dim]:
-            with K.name_scope('adjust_reduction_block_%s' % id):
-                p = Activation('relu', name='adjust_relu_1_%s' % id)(p)
-
-                p1 = AveragePooling2D((1, 1), strides=(2, 2), padding='valid', name='adjust_avg_pool_1_%s' % id)(p)
-                p1 = Conv2D(filters // 2, (1, 1), padding='same', use_bias=False, kernel_regularizer=l2(weight_decay),
-                            name='adjust_conv_1_%s' % id, kernel_initializer='he_normal')(p1)
-
-                p2 = ZeroPadding2D(padding=((0, 1), (0, 1)))(p)
-                p2 = Cropping2D(cropping=((1, 0), (1, 0)))(p2)
-                p2 = AveragePooling2D((1, 1), strides=(2, 2), padding='valid', name='adjust_avg_pool_2_%s' % id)(p2)
-                p2 = Conv2D(filters // 2, (1, 1), padding='same', use_bias=False, kernel_regularizer=l2(weight_decay),
-                            name='adjust_conv_2_%s' % id, kernel_initializer='he_normal')(p2)
-
-                p = concatenate([p1, p2], axis=channel_dim)
-                p = BatchNormalization(axis=channel_dim, momentum=_BN_DECAY, epsilon=_BN_EPSILON,
-                                       name='adjust_bn_%s' % id)(p)
-
-        elif p._keras_shape[channel_dim] != filters:
-            with K.name_scope('adjust_projection_block_%s' % id):
-                p = Activation('relu')(p)
-                p = Conv2D(filters, (1, 1), strides=(1, 1), padding='same', name='adjust_conv_projection_%s' % id,
-                           use_bias=False, kernel_regularizer=l2(weight_decay), kernel_initializer='he_normal')(p)
-                p = BatchNormalization(axis=channel_dim, momentum=_BN_DECAY, epsilon=_BN_EPSILON,
-                                       name='adjust_bn_%s' % id)(p)
-    return p
-
-
-def _normal_A(ip, p, filters, weight_decay=5e-5, id=None, deform=False, reguliarizer=None):
-    '''Adds a Normal cell for NASNet-A (Fig. 4 in the paper)
-
-    # Arguments:
-        ip: input tensor `x`
-        p: input tensor `p`
-        filters: number of output filters
-        weight_decay: l2 regularization weight
-        id: string id
-
-    # Returns:
-        a Keras tensor
-    '''
-    channel_dim = 1 if K.image_data_format() == 'channels_first' else -1
-
-    conv_reguliarizer = l2(weight_decay) if reguliarizer is None else OrthLocalReg2D
-    sep_conv_reguliarizer = l2(weight_decay) if reguliarizer is None else OrthLocalRegSep2D
-
-    with K.name_scope('normal_A_block_%s' % id):
-        p = _adjust_block(p, ip, filters, weight_decay, id)
-
-        h = Activation('relu')(ip)
-        h = Conv2D(filters, (1, 1), strides=(1, 1), padding='same', name='normal_conv_1_%s' % id,
-                   use_bias=False, kernel_initializer='he_normal', kernel_regularizer=conv_reguliarizer)(h)
-        h = BatchNormalization(axis=channel_dim, momentum=_BN_DECAY, epsilon=_BN_EPSILON,
-                               name='normal_bn_1_%s' % id)(h)
-
-        if deform:
-            h = ConvOffset2D(filters, name='normal_offset_%s' % id)(h, use_resam=True)
-
-        with K.name_scope('block_1'):
-            x1_1 = _separable_conv_block(h, filters, kernel_size=(5, 5), weight_decay=weight_decay, reguliarizer=sep_conv_reguliarizer,
-                                         id='normal_left1_%s' % id)
-            x1_2 = _separable_conv_block(p, filters, weight_decay=weight_decay, reguliarizer=sep_conv_reguliarizer, id='normal_right1_%s' % id)
-            x1 = add([x1_1, x1_2], name='normal_add_1_%s' % id)
-
-        with K.name_scope('block_2'):
-            x2_1 = _separable_conv_block(p, filters, (5, 5), weight_decay=weight_decay, reguliarizer=sep_conv_reguliarizer, id='normal_left2_%s' % id)
-            x2_2 = _separable_conv_block(p, filters, (3, 3), weight_decay=weight_decay, reguliarizer=sep_conv_reguliarizer,id='normal_right2_%s' % id)
-            x2 = add([x2_1, x2_2], name='normal_add_2_%s' % id)
-
-        with K.name_scope('block_3'):
-            x3 = AveragePooling2D((3, 3), strides=(1, 1), padding='same', name='normal_left3_%s' % (id))(h)
-            x3 = add([x3, p], name='normal_add_3_%s' % id)
-
-        with K.name_scope('block_4'):
-            x4_1 = AveragePooling2D((3, 3), strides=(1, 1), padding='same', name='normal_left4_%s' % (id))(p)
-            x4_2 = AveragePooling2D((3, 3), strides=(1, 1), padding='same', name='normal_right4_%s' % (id))(p)
-            x4 = add([x4_1, x4_2], name='normal_add_4_%s' % id)
-
-        with K.name_scope('block_5'):
-            x5 = _separable_conv_block(h, filters, weight_decay=weight_decay, reguliarizer=sep_conv_reguliarizer, id='normal_left5_%s' % id)
-            x5 = add([x5, h], name='normal_add_5_%s' % id)
-
-        x = concatenate([p, x1, x2, x3, x4, x5], axis=channel_dim, name='normal_concat_%s' % id)
-    return x, ip
-
-
-def _reduction_A(ip, p, filters, weight_decay=5e-5, id=None):
-    '''Adds a Reduction cell for NASNet-A (Fig. 4 in the paper)
-
-    # Arguments:
-        ip: input tensor `x`
-        p: input tensor `p`
-        filters: number of output filters
-        weight_decay: l2 regularization weight
-        id: string id
-
-    # Returns:
-        a Keras tensor
-    '''
-    """"""
-    channel_dim = 1 if K.image_data_format() == 'channels_first' else -1
-
-    with K.name_scope('reduction_A_block_%s' % id):
-        p = _adjust_block(p, ip, filters, weight_decay, id)
-
-        h = Activation('relu')(ip)
-        h = Conv2D(filters, (1, 1), strides=(1, 1), padding='same', name='reduction_conv_1_%s' % id,
-                   use_bias=False, kernel_initializer='he_normal', kernel_regularizer=l2(weight_decay))(h)
-        h = BatchNormalization(axis=channel_dim, momentum=_BN_DECAY, epsilon=_BN_EPSILON,
-                               name='reduction_bn_1_%s' % id)(h)
-
-        with K.name_scope('block_1'):
-            x1_1 = _separable_conv_block(h, filters, (5, 5), strides=(2, 2), weight_decay=weight_decay,
-                                         id='reduction_left1_%s' % id)
-            x1_2 = _separable_conv_block(p, filters, (7, 7), strides=(2, 2), weight_decay=weight_decay,
-                                         id='reduction_1_%s' % id)
-            x1 = add([x1_1, x1_2], name='reduction_add_1_%s' % id)
-
-        with K.name_scope('block_2'):
-            x2_1 = MaxPooling2D((3, 3), strides=(2, 2), padding='same', name='reduction_left2_%s' % id)(h)
-            x2_2 = _separable_conv_block(p, filters, (7, 7), strides=(2, 2), weight_decay=weight_decay,
-                                         id='reduction_right2_%s' % id)
-            x2 = add([x2_1, x2_2], name='reduction_add_2_%s' % id)
-
-        with K.name_scope('block_3'):
-            x3_1 = AveragePooling2D((3, 3), strides=(2, 2), padding='same', name='reduction_left3_%s' % id)(h)
-            x3_2 = _separable_conv_block(p, filters, (5, 5), strides=(2, 2), weight_decay=weight_decay,
-                                         id='reduction_right3_%s' % id)
-            x3 = add([x3_1, x3_2], name='reduction_add3_%s' % id)
-
-        with K.name_scope('block_4'):
-            x4 = AveragePooling2D((3, 3), strides=(1, 1), padding='same', name='reduction_left4_%s' % id)(x1)
-            x4 = add([x2, x4])
-
-        with K.name_scope('block_5'):
-            x5_1 = _separable_conv_block(x1, filters, (3, 3), weight_decay=weight_decay, id='reduction_left4_%s' % id)
-            x5_2 = MaxPooling2D((3, 3), strides=(2, 2), padding='same', name='reduction_right5_%s' % id)(h)
-            x5 = add([x5_1, x5_2], name='reduction_add4_%s' % id)
-
-        x = concatenate([x2, x3, x4, x5], axis=channel_dim, name='reduction_concat_%s' % id)
-        return x, ip
-
-
-def _add_auxiliary_head(x, classes, weight_decay):
-    '''Adds an auxiliary head for training the model
-
-    From section A.7 "Training of ImageNet models" of the paper, all NASNet models are
-    trained using an auxiliary classifier around 2/3 of the depth of the network, with
-    a loss weight of 0.4
-
-    # Arguments
-        x: input tensor
-        classes: number of output classes
-        weight_decay: l2 regularization weight
-
-    # Returns
-        a keras Tensor
-    '''
-    img_height = 1 if K.image_data_format() == 'channels_last' else 2
-    img_width = 2 if K.image_data_format() == 'channels_last' else 3
-    channel_axis = 1 if K.image_data_format() == 'channels_first' else -1
-
-    with K.name_scope('auxiliary_branch'):
-        auxiliary_x = Activation('relu')(x)
-        auxiliary_x = AveragePooling2D((5, 5), strides=(3, 3), padding='valid', name='aux_pool')(auxiliary_x)
-        auxiliary_x = Conv2D(128, (1, 1), padding='same', use_bias=False, name='aux_conv_projection',
-                            kernel_initializer='he_normal', kernel_regularizer=l2(weight_decay))(auxiliary_x)
-        auxiliary_x = BatchNormalization(axis=channel_axis, momentum=_BN_DECAY, epsilon=_BN_EPSILON,
-                                        name='aux_bn_projection')(auxiliary_x)
-        auxiliary_x = Activation('relu')(auxiliary_x)
-
-        auxiliary_x = Conv2D(768, (auxiliary_x._keras_shape[img_height], auxiliary_x._keras_shape[img_width]),
-                            padding='valid', use_bias=False, kernel_initializer='he_normal',
-                            kernel_regularizer=l2(weight_decay), name='aux_conv_reduction')(auxiliary_x)
-        auxiliary_x = BatchNormalization(axis=channel_axis, momentum=_BN_DECAY, epsilon=_BN_EPSILON,
-                                        name='aux_bn_reduction')(auxiliary_x)
-        auxiliary_x = Activation('relu')(auxiliary_x)
-
-        auxiliary_x = GlobalAveragePooling2D()(auxiliary_x)
-        auxiliary_x = Dense(classes, activation='softmax', kernel_regularizer=l2(weight_decay),
-                           name='aux_predictions')(auxiliary_x)
-    return auxiliary_x
-
-
-if __name__ == '__main__':
-    import tensorflow as tf
-
-    sess = tf.Session()
-
-    K.set_session(sess)
-
-    model = NASNetLarge((331, 331, 3))
-    model.summary()
-
-    writer = tf.summary.FileWriter('./logs/', graph=K.get_session().graph)
-    writer.close()
+            add3 = l
+
+        if h_i1sub is not None:
+            avg_p1 = AveragePooling2D(pool_size=(3, 3), strides=(stride, stride), padding='same')(h_i1sub)
+            # avg_p2 = AveragePooling2D(pool_size=(3, 3), strides=(stride, stride), padding='same')(h_i1sub)
+            # add4 = Add()([avg_p1, avg_p2])
+            add4 = avg_p1
+
+            l_1sub_1 = SeparableConv2D(filter_o, (3, 3), padding='same', name='%s_sep3x3_sub_2' % name, trainable=trainable, depthwise_regularizer=OrthLocalRegSep2D)(h_i1sub)
+            l_1sub_1 = Activation('relu', name='%s_sep3x3_sub_2_relu' % name)(l_1sub_1)
+            l_1sub_1 = BatchNormalization(name='%s_sep3x3_sub_2_bn' % name)(l_1sub_1)
+            l_1sub_2 = SeparableConv2D(filter_o, (5, 5), padding='same', name='%s_sep5x5_sub_2' % name, trainable=trainable, depthwise_regularizer=OrthLocalRegSep2D)(h_i1sub)
+            l_1sub_2 = Activation('relu', name='%s_sep5x5_sub_2_relu' % name)(l_1sub_2)
+            l_1sub_2 = BatchNormalization(name='%s_sep5x5_sub_2_bn' % name)(l_1sub_2)
+            add5 = Add()([l_1sub_1, l_1sub_2])
+
+            result = concatenate([add1, add2, add3, add4, add5])
+
+            if is_tail:
+                result = Conv2D(filter_o, (1, 1), strides=(1, 1), padding='same', name='%s_result1x1_align' % name, trainable=trainable, kernel_regularizer=OrthLocalReg2D)(result)
+                result = Activation('relu', name='%s_result1x1_align_relu' % name)(result)
+                result = BatchNormalization(name='%s_result1x1_align_bn' % name)(result)
+            return result
+        else:
+            result = concatenate([add1, add2, add3])
+
+            if is_tail:
+                result = Conv2D(filter_o, (1, 1), strides=(1, 1), padding='same', name='%s_result1x1_align' % name, trainable=trainable, kernel_regularizer=OrthLocalReg2D)(result)
+                result = Activation('relu', name='%s_result1x1_align_relu' % name)(result)
+                result = BatchNormalization(name='%s_result1x1_align_bn' % name)(result)
+            return result
+
+
+    def ReductionCell(hi, h_i1sub, filter_i, filter_o, stride=2, name="NAS", is_tail=False):
+        """
+        adjust feature size & channel size
+        """
+        h_i1sub = _adjust_block(h_i1sub, hi, filter_o, 0, name)
+
+        hi = Conv2D(filter_o, (1, 1), padding='same', name='%s_hi_align' % name, trainable=trainable, kernel_regularizer=OrthLocalReg2D)(hi)
+        hi = Activation('relu', name='%s_hi_align_relu' % name)(hi)
+        hi = BatchNormalization(name='%s_hi_align_bn' % name)(hi)
+
+        """
+        SubLayer 1
+        """
+        l = SeparableConv2D(filter_o, (5, 5), strides=(stride, stride), padding='same', name='%s_sep5x5_1' % name, trainable=trainable, depthwise_regularizer=OrthLocalRegSep2D)(hi)
+        l = Activation('relu', name='%s_sep5x5_1_relu' % name)(l)
+        l = BatchNormalization(name='%s_sep5x5_1_bn' % name)(l)
+
+        if h_i1sub is not None:
+            l_1sub = SeparableConv2D(filter_o, (7, 7), strides=(stride, stride), padding='same', name='%s_sep7x7_sub_1' % name, trainable=trainable, depthwise_regularizer=OrthLocalRegSep2D)(h_i1sub)
+            l_1sub = Activation('relu', name='%s_sep7x7_sub_1_relu' % name)(l_1sub)
+            l_1sub = BatchNormalization(name='%s_sep7x7_sub_1_bn' % name)(l_1sub)
+            add1 = Add()([l, l_1sub])
+        else:
+            add1 = l
+
+        l = SeparableConv2D(filter_o, (3, 3), strides=(stride, stride), padding='same', name='%s_sep3x3_1' % name, trainable=trainable, depthwise_regularizer=OrthLocalRegSep2D)(hi)
+        l = Activation('relu', name='%s_sep3x3_1_relu' % name)(l)
+        l = BatchNormalization(name='%s_sep3x3_1_bn' % name)(l)
+
+        if h_i1sub is not None:
+            l_1sub = SeparableConv2D(filter_o, (7, 7), strides=(stride, stride), padding='same', name='%s_sep7x7_sub_2' % name, trainable=trainable, depthwise_regularizer=OrthLocalRegSep2D)(h_i1sub)
+            l_1sub = Activation('relu', name='%s_sep7x7_sub_2_relu' % name)(l_1sub)
+            l_1sub = BatchNormalization(name='%s_sep7x7_sub_2_bn' % name)(l_1sub)
+            add2 = Add()([l, l_1sub])
+        else:
+            add2 = l
+
+        l = AveragePooling2D(pool_size=(3, 3), strides=(stride, stride), padding='same')(hi)
+        if filter_i != filter_o:
+            l = Conv2D(filter_o, (1, 1), strides=(1, 1), padding='same', name='%s_sep1x1_align' % name, trainable=trainable)(l)
+            l = Activation('relu', name='%s_sep1x1_align_relu' % name)(l)
+            l = BatchNormalization(name='%s_sep1x1_align_bn' % name)(l)
+        if h_i1sub is not None:
+            l_1sub = SeparableConv2D(filter_o, (5, 5), strides=(stride, stride), padding='same', name='%s_sep5x5_sub_1' % name, trainable=trainable, depthwise_regularizer=OrthLocalRegSep2D)(h_i1sub)
+            l_1sub = Activation('relu', name='%s_sep5x5_sub_1_relu' % name)(l_1sub)
+            l_1sub = BatchNormalization(name='%s_sep5x5_sub_1_bn' % name)(l_1sub)
+            add3 = Add()([l, l_1sub])
+        else:
+            add3 = l
+
+        """
+        SubLayer 2
+        """
+        l = MaxPooling2D(pool_size=(3, 3), strides=(stride, stride), padding='same')(hi)
+        if filter_i != filter_o:
+            l = Conv2D(filter_o, (1, 1), strides=(1, 1), padding='same', name='%s_sep1x1_align_2' % name, trainable=trainable)(l)
+            l = Activation('relu', name='%s_sep1x1_align_2_relu' % name)(l)
+            l = BatchNormalization(name='%s_sep1x1_align_2_bn' % name)(l)
+        l_1sub = SeparableConv2D(filter_o, (3, 3), padding='same', name='%s_sep3x3_2' % name, trainable=trainable, depthwise_regularizer=OrthLocalRegSep2D)(add1)
+        l_1sub = Activation('relu', name='%s_sep3x3_2_relu' % name)(l_1sub)
+        l_1sub = BatchNormalization(name='%s_sep3x3_2_bn' % name)(l_1sub)
+        add4 = Add()([l, l_1sub])
+
+        l = AveragePooling2D(pool_size=(3, 3), strides=(1, 1), padding='same')(add1)
+        add5 = Add()([l, add2])
+
+        result = concatenate([add3, add4, add5])
+
+        if is_tail:
+            result = Conv2D(filter_o, (1, 1), strides=(1, 1), padding='same', name='%s_result1x1_align' % name, trainable=trainable, kernel_regularizer=OrthLocalReg2D)(result)
+            result = Activation('relu', name='%s_result1x1_align_relu' % name)(result)
+            result = BatchNormalization(name='%s_result1x1_align_bn' % name)(result)
+        return result
+
+    inputs = l = Input((img_size, img_size, 3), name='input')
+
+    l = Conv2D(24, (3, 3), strides=(2, 2), padding='same', name='conv11', trainable=trainable, kernel_regularizer=OrthLocalReg2D)(inputs)
+    l = Activation('relu', name='conv11_relu')(l)
+    l = BatchNormalization(name='conv11_bn')(l)
+
+    l2 = InvConv2D(8, (3, 3), strides=(2, 2), padding='same', name='inv_conv11', trainable=trainable, kernel_regularizer=OrthLocalReg2D)(inputs)
+    l2 = Activation('relu', name='inv_conv11_relu')(l2)
+    l2 = BatchNormalization(name='inv_conv11_bn')(l2)
+
+    l = stem = concatenate([l, l2])
+
+    # l = Conv2D(48, (3, 3), padding='same', name='conv12', trainable=trainable, kernel_regularizer=OrthLocalReg2D)(l)
+
+    l = NAS_Redu_1 = ReductionCell(l, None, 32, 64, name="NAS_Redu_1")
+    l = NAS_Redu_2 = ReductionCell(l, stem, 64, 128, name="NAS_Redu_2")
+    l = NAS_Norm_3 = NormalCell(l, NAS_Redu_1, 128, 128, name="NAS_Norm_3")
+    l = NAS_Norm_4 = NormalCell(l, NAS_Redu_2, 128, 128, name="NAS_Norm_4")
+
+    l = NAS_Redu_5 = ReductionCell(l, NAS_Norm_3, 128, 192, name="NAS_Redu_5")
+    l = NAS_Norm_6 = NormalCell(l, NAS_Norm_4, 192, 192, name="NAS_Norm_6", is_tail=True)
+    l = CapsuleRouting(192, 192, 169, 169, name='cp0', reshape_cnn=True)(l)
+    l = NAS_Norm_7 = NormalCell(l, NAS_Redu_5, 192, 192, name="NAS_Norm_7")
+
+    l = NAS_Redu_8 = ReductionCell(l, NAS_Norm_6, 192, 384, name="NAS_Redu_8")
+    l = NAS_Norm_9 = NormalCell(l, NAS_Norm_7, 384, 384, name="NAS_Norm_9", is_tail=True)
+    l = CapsuleRouting(384, 384, 49, 49, name='cp1', reshape_cnn=True)(l)
+    l = NAS_Norm_10 = NormalCell(l, NAS_Redu_8, 384, 384, name="NAS_Norm_10", use_deform=True)
+
+
+    # l = ConvOffset2D(384, name='conv33_offset', kernel_regularizer=OrthLocalReg2D)(l, use_resam=True)
+    l = NAS_Redu_11= ReductionCell(l, NAS_Norm_9, 384, 768, name="NAS_Redu_11")
+    l = NAS_Norm_12 = NormalCell(l, NAS_Norm_10, 768, 768, name="NAS_Norm_12", is_tail=True)
+    l = CapsuleRouting(768, 768, 16, 16, name='cp2', reshape_cnn=True,)(l)
+    l = NAS_Norm_13 = NormalCell(l, NAS_Redu_11, 768, 768, name="NAS_Norm_13", use_deform=False, is_tail=True)
+    # l = NAS_Redu_14= ReductionCell(l, NAS_Norm_13, 768, 1024, name="NAS_Redu_14")
+
+    # tt = l = SpatialPyramidPooling([1, 2, 4], input_shape=[None, None, 768])(l)
+    l = GlobalAveragePooling2D()(l)
+
+    # l = CapsuleRouting(768, 768, 16, 8, name='cp1', reduce_max=False)(l)
+    # l = CapsuleRouting(768, 256, 8, 8, name='cp2')(l)
+    # l = CapsuleRouting(256, 128, 8, 8, name='cp3')(l)
+    # l = CapsuleRouting(128, 32, 8, 4, name='cp4')(l)
+    # l = CapsuleRouting(32, class_num, 4, 4, name='cp5', reduce_max=True)(l)
+    # l = Dense(256, name='fc1', trainable=trainable, kernel_regularizer=OrthLocalReg1D)(l)
+    # l = Activation('relu', name='fc1_relu')(l)
+    #
+    # l = Dense(128, name='fc2', trainable=trainable, kernel_regularizer=OrthLocalReg1D)(l)
+    # l = Activation('relu', name='fc2_relu')(l)
+    #
+    # l = Dense(class_num, name='fc3', trainable=trainable)(l)
+    # l = Activation('relu', name='fc3_relu')(l)
+
+
+    # l = MaxPooling2D(name='max_pool_final')(l)
+    # l = Flatten(name='flatten_maxpool')(l)
+
+    l = Dense(768, name='fc1', trainable=trainable, kernel_regularizer=OrthLocalReg1D)(l)
+    l = Activation('relu', name='fc1_relu')(l)
+    
+    l = Dense(256, name='fc2', trainable=trainable, kernel_regularizer=OrthLocalReg1D)(l)
+    l = Activation('relu', name='fc2_relu')(l)
+    
+    l = Dense(class_num, name='fc3', trainable=trainable)(l)
+    outputs = Activation('softmax', name='out')(l)
+
+    return inputs, outputs

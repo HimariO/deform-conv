@@ -124,6 +124,7 @@ def mix_dataset(dir_path):
 
             except IndexError:
                 # this dataset have less npz than other.
+                print('Skip 1 npz in \'%s\' dataset' % set_name[j])
                 pass
 
         keys = list(mix_set.keys())
@@ -493,8 +494,9 @@ if __name__ == "__main__":
     i = 0
     # npz_2('../../val_set', resize=[200, 200])
 
-    # npz_2('../../COCO', resize=[200, 200])
-    mix_dataset('face_age_dataset')
+    # npz_2('../../face_age_ikea_0116', resize=[200, 200])
+    npz_2('person_gender_ikea_val', resize=[200, 200])
+    # mix_dataset('./person_gender_ikea')
 
     # GEn = NPZ_gen('./mtcnn_face_age', 10, 32, 1, dataset_size=95000)
 
