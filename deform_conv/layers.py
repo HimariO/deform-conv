@@ -624,6 +624,106 @@ class CapsulePooling2D(Layer):
         return (input_shape[0], rows, cols, input_shape[3])
 
 
+class ScaleConv(Layer):
+
+    def __init__(self, filter_num, filter_size, input_channel, branch=1, stride=[1, 1, 1, 1], regularizer=None, **kwargs):
+        self.filter_num = filter_num
+        self.filter_size = filter_size
+        self.min_filter_size = 1
+        assert filter_size - self.min_filter_size > 3
+
+        self.stride = stride
+        self.input_channel = input_channel
+        self.branch = branch
+        self.regularizer = regularizer
+
+        super(ScaleConv, self).__init__(**kwargs)
+
+    def build(self, input_shape):
+        # Create a trainable weight variable for this layer.
+        self.kernel = self.add_weight(
+            name='%s_kernel' % self.name,
+            shape=[self.filter_size, self.filter_size, self.input_channel, self.filter_num],
+            initializer='uniform',
+            trainable=True,
+            regularizer=self.regularizer,
+        )
+
+        # self.branch_fc_kernel = []
+        #
+        if self.branch > 1:
+            self.kernel_x1 = self.add_weight(
+                name='%s_kernel_x1' % self.name,
+                shape=[1, 1, self.filter_num * self.branch, self.filter_num],
+                initializer='uniform',
+                trainable=True,
+            )
+
+        super(ScaleConv, self).build(input_shape)  # Be sure to call this somewhere!
+
+    def call(self, x):
+        GAP = tf.reduce_mean(x, [1, 2])
+
+        self.branch_fc_output = []
+        self.branch_conv_output = []
+
+        kernel_FHWC = tf.transpose(self.kernel, perm=[3, 0, 1, 2])
+
+        for _ in range(self.branch):
+            self.branch_fc_output.append(
+                tf.layers.dense(GAP, 2, activation=tf.nn.sigmoid)
+            )
+
+            new_size = self.branch_fc_output[-1] * tf.cast(tf.shape(self.kernel)[0:2] - self.min_filter_size, tf.float32)
+            new_size += self.min_filter_size
+            new_size = tf.cast(new_size, tf.int32)
+
+            resize_kernel = tf.images.resize_images(kernel_FHWC, new_size)
+            resize_kernel = tf.transpose(resize_kernel, perm=[1, 2, 3, 0])
+
+            self.branch_conv_output.append(
+                tf.nn.conv2d(
+                    x,
+                    resize_kernel,
+                    self.stride,
+                    'SAME',
+                    use_cudnn_on_gpu=True,
+                    data_format='NHWC',
+                    dilations=[1, 1, 1, 1],
+                )
+            )
+
+        if self.branch == 1:
+            return self.branch_conv_output[0]
+        else:
+            all_branch_out = tf.concat(self.branch_conv_output, 3)
+
+            final_out = tf.nn.conv2d(
+                all_branch_out,
+                self.kernel_x1,
+                [1, 1, 1, 1],
+                'SAME',
+                use_cudnn_on_gpu=True,
+                data_format='NHWC',
+                dilations=[1, 1, 1, 1],
+            )
+            return final_out
+
+    def compute_output_shape(self, input_shape):
+        # print('compute_output_shape:input_shape', input_shape)
+        if input_shape[1]:
+            new_h = len(range(0, input_shape[1], self.stride[1]))
+        else:
+            new_h = None
+
+        if input_shape[2]:
+            new_w = len(range(0, input_shape[2], self.stride[2]))
+        else:
+            new_w = None
+
+        return (input_shape[0], new_h, new_w, self.filter_num)
+
+
 def OrthLocalReg2D(W, L=10., ratio=1e-2, L2=None):
     """
     Local orthognal reguliation for 2D CNN filter

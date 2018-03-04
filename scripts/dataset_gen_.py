@@ -43,7 +43,7 @@ def threadsafe_generator(f):
 
 class NPZ_gen:
     def __init__(self, dataset_dir, class_num, batch_size, epoch, dataset_size=None,
-                 soft_onehot=True, hierarchy_onehot=False, gate=False, flip=True, resize=None,
+                 soft_onehot=True, hierarchy_onehot=False, gate=False, flip=True, flip_v=False, resize=None,
                  random_scale=None, random_resize=None, random_crop=None, random_noise=None, random_blur=False, random_gamma=None):
 
         # assert random_scale < .5 and random_scale > .0
@@ -58,6 +58,7 @@ class NPZ_gen:
             'resize': resize,
             'soft_onehot': soft_onehot,
             'flip': flip,
+            'flip_v': flip_v,
             'random_scale': random_scale,
             'random_resize': random_resize,
             'random_crop': random_crop,
@@ -160,22 +161,22 @@ class NPZ_gen:
     @threadsafe_generator
     def get_some(self):
         # loop through different npy file
-        for npz_path in self.datas * (self.epoch * 2):
-            # npz = np.load(npz_path)
-            while(self._wait_load()):
-                pass
+        num_cores = multiprocessing.cpu_count()
+        with Parallel(n_jobs=num_cores) as parallel:
+            for npz_path in self.datas * (self.epoch * 2):
+                # npz = np.load(npz_path)
+                while(self._wait_load()):
+                    pass
 
-            npz = self.next_one
-            self.next_one = None
-            keys = list(npz.keys())
-            random.shuffle(keys)
+                npz = self.next_one
+                self.next_one = None
+                keys = list(npz.keys())
+                random.shuffle(keys)
 
-            npz_size = len(npz.keys())
-            self.output_img_num += npz_size
+                npz_size = len(npz.keys())
+                self.output_img_num += npz_size
 
-            # loop through datas inside npy file
-            num_cores = multiprocessing.cpu_count()
-            with Parallel(n_jobs=num_cores) as parallel:
+                # loop through datas inside npy file
                 for i in range(0, npz_size, self.batch_size):
                     if (i + self.batch_size) <= npz_size:
                         B = self._process_data(npz, i, i + self.batch_size, keys, parallel, **self.data_preprocess)
@@ -183,7 +184,7 @@ class NPZ_gen:
                         yield X, Y
                     else:
                         break
-            del npz
+                del npz
 
         self.next_one = 'end'
 
@@ -238,6 +239,7 @@ class NPZ_gen:
 
         keras_model = args['keras_model']
         flip = args['flip']
+        flip_v = args['flip_v']
         resize = args['resize']
 
         random_scale = args['random_scale']
@@ -263,6 +265,9 @@ class NPZ_gen:
 
         if flip:
             img_fp = np.flip(img_fp, 1) if random.random() > 0.5 else img_fp
+
+        if flip_v:
+            img_fp = np.flip(img_fp, 0) if random.random() > 0.5 else img_fp
             # img_fp = np.flip(img_fp, 0) if random.random() > 0.5 else img_fp
         if random_scale:
             for channel in range(img_fp.shape[2]):
@@ -345,7 +350,7 @@ class NPZ_gen:
 
         return img_fp, img_onehot
 
-    def _process_data(self, npz, range_a, range_b, keys, parallel, resize=None, flip=False, soft_onehot=True, hierarchy_onehot=False, gate=False,
+    def _process_data(self, npz, range_a, range_b, keys, parallel, resize=None, flip=False, flip_v=False, soft_onehot=True, hierarchy_onehot=False, gate=False,
                       keras_model=False, random_scale=None, random_resize=None, random_crop=None, random_noise=None, random_blur=False, random_gamma=False):
         # keys = list(npz.keys())
         input_vec = []
@@ -368,6 +373,7 @@ class NPZ_gen:
 
         args = {
             'flip': flip,
+            'flip_v': flip_v,
             'resize': resize,
             'soft_onehot': soft_onehot,
             'hierarchy_onehot': hierarchy_onehot,

@@ -42,7 +42,7 @@ GPU = args.gpu
 
 class_num = 2
 batch_size = 32 * GPU_NUM
-n_train = 73152 # dataset size
+n_train = 110000 # dataset size
 # n_train = 96 * 10 # dataset size
 # n_test = batch_size * 10
 steps_per_epoch = n_train // batch_size
@@ -52,13 +52,21 @@ validation_steps = (3000 // batch_size)
 # validation_steps -= validation_steps % GPU_NUM
 
 dataset = NPZ_gen(
-    './person_gender_ikea', class_num, batch_size, 1000, resize=224,
-    dataset_size=n_train, flip=True, hierarchy_onehot=False, soft_onehot=False,
+    './person_gender', class_num, batch_size, 1000, resize=224,
+    dataset_size=n_train, flip=True, flip_v=True, hierarchy_onehot=False, soft_onehot=False,
     random_scale=0.1, random_crop=0.1, random_resize=None, random_noise=None,
 )
 
 train_gen = dataset.get_some()
-val_gen = dataset.get_val(num_batch=validation_steps)
+# val_gen = dataset.get_val(num_batch=validation_steps)
+img_data = ImageDataGenerator()
+val_gen = img_data.flow_from_directory(
+    '/home/share/Ron/a1059s101_1s1_0201',
+    target_size=[224, 224],
+    batch_size=batch_size,
+    shuffle=True
+)
+validation_steps = 3456//batch_size
 
 config = tf.ConfigProto()
 config.gpu_options.allow_growth = True
@@ -98,11 +106,12 @@ with tf.Session(config=config) as sess:
                     epochs=1000,
                     validation_data=val_gen, validation_steps=validation_steps,
                     callbacks=[checkpoint, checkpoint_tl, spreadsheet],
+                    workers=10, max_queue_size=40,
                 )
                 model.save_weights('../models/deform_cnn_pg_finish.h5')
 
             except KeyboardInterrupt:
-                model.save_weights('deform_cnn_inv_interrupt.npz')
+                model.save_weights('deform_cnn_pg_interrupt.h5')
         else:
             # --
             # Evaluate deformable CNN

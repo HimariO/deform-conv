@@ -48,11 +48,14 @@ def npz_2(root_path, resize=None):
     data_size = len(img_all_class)
     num_per_file = data_size // 10 if data_size // 10 < 10000 else 10000
     num_per_file = 10000
+    output_counter = 0
 
     for img_n, i in zip(img_all_class, range(data_size)):
+        abs_path = os.path.join(root_path, img_n['class'], img_n['file_name'])
+
         try:
-            abs_path = os.path.join(root_path, img_n['class'], img_n['file_name'])
-            print(abs_path, '%d/%d' % (i, data_size))
+            sys.stdout.write('\r [%d/%d] %s' % (i, data_size, abs_path))
+            sys.stdout.flush()
             pil_img = Image.open(abs_path)
 
             if resize is not None:
@@ -63,9 +66,9 @@ def npz_2(root_path, resize=None):
             if len(img.shape) != 3:
                 continue
         except KeyboardInterrupt:
-            import sys
             sys.exit(1)
         except:
+            print("\n Encounter some issue when reading {%s}." % abs_path)
             continue
 
         dataset[img_n['file_name']] = {}
@@ -73,7 +76,10 @@ def npz_2(root_path, resize=None):
         dataset[img_n['file_name']]['label'] = int(img_n['class'])
 
         if (i % num_per_file == 0 and i != 0) or i == data_size - 1:
-            np.savez(os.path.join(root_path, 'dataset_%d' % (i//num_per_file)), **dataset)
+            file_name = os.path.join(root_path, 'dataset_%d' % output_counter)
+            print('\n Save to: ', file_name)
+            np.savez(file_name, **dataset)
+            output_counter += 1
             del dataset
             dataset = {}
 
@@ -495,7 +501,7 @@ if __name__ == "__main__":
     # npz_2('../../val_set', resize=[200, 200])
 
     # npz_2('../../face_age_ikea_0116', resize=[200, 200])
-    npz_2('person_gender_ikea_val', resize=[200, 200])
+    npz_2('./person_gender', resize=[224, 224])
     # mix_dataset('./person_gender_ikea')
 
     # GEn = NPZ_gen('./mtcnn_face_age', 10, 32, 1, dataset_size=95000)

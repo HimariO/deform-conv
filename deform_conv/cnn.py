@@ -567,7 +567,7 @@ def get_test_cnn(class_n, trainable=True, dropout_sample=False):
 			x_d = Activation('relu', name='%s_d%d_relu' % (block_name, l))(x_d)
 			x_d = BatchNormalization(name='%s_d%d_bn' % (block_name, l))(x_d)
 
-			x_u = Conv2D(F*2**(l%2), (3, 3), name='%s_u%d' % (block_name, l), **conv_args)(x_u)
+			x_u = Conv2D(F*2**((l+1)%2), (3, 3), name='%s_u%d' % (block_name, l), **conv_args)(x_u)
 			x_u = Activation('relu', name='%s_u%d_relu' % (block_name, l))(x_u)
 			x_u = BatchNormalization(name='%s_u%d_bn' % (block_name, l))(x_u)
 
@@ -583,30 +583,28 @@ def get_test_cnn(class_n, trainable=True, dropout_sample=False):
 			x_d_u = Add()([x_d_u, X])
 		return x_d_u
 
-
 	inputs = l = Input((224, 224, 3), name='input')
-
 
 	l = ImageNorm()(l)
 # 100 50 25 13 6
-	l = Conv2D(64, (3, 3), strides=(2, 2), name='conv11', **conv_args)(l)
+	l = Conv2D(32, (3, 3), strides=(2, 2), name='conv11', **conv_args)(l)
 	l = Activation('relu', name='conv11_relu')(l)
 	l = BatchNormalization(name='conv11_bn')(l)
 
-	l = block(l, 64, 128, 3, 'L1_3')
+	l = block(l, 32, 64, 3, 'L1_3')
 
-	l = Conv2D(256, (3, 3), strides=(2, 2), name='conv21', **conv_args)(l)
+	l = Conv2D(128, (3, 3), strides=(2, 2), name='conv21', **conv_args)(l)
 	l = Activation('relu', name='conv21_relu')(l)
 	l = BatchNormalization(name='conv21_bn')(l)
 
-	l = block(l, 256, 256, 3, 'L2_3')
+	l = block(l, 128, 128, 3, 'L2_3')
 
-	l = ConvOffset2D(256, name='conv31_offset')(l)
-	l = Conv2D(512, (3, 3), strides=(2, 2), name='conv31', **conv_args)(l)
+	l = ConvOffset2D(128, name='conv31_offset')(l)
+	l = Conv2D(256, (3, 3), strides=(2, 2), name='conv31', **conv_args)(l)
 	l = Activation('relu', name='conv31_relu')(l)
 	l = BatchNormalization(name='conv31_bn')(l)
 
-	l = block(l, 512, 512, 2, 'L3_3')
+	l = block(l, 256, 256, 2, 'L3_3')
 
 	l = Conv2D(512, (3, 3), strides=(2, 2), name='conv41', **conv_args)(l)
 	l = Activation('relu', name='conv41_relu')(l)
