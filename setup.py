@@ -14,5 +14,6 @@ setup(name='deform_conv',
           'matplotlib',
           'google-api-python-client',
           'h5py',
+          'termcolor'
       ],
       zip_safe=False)

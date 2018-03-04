@@ -6,7 +6,7 @@ from keras.layers import Lambda
 from keras.layers.merge import concatenate
 from keras.models import load_model, Model
 from keras.optimizers import Adam, SGD
-import deform_conv.memory_saving_gradients as MSG
+# import deform_conv.memory_saving_gradients as MSG
 
 import tensorflow as tf
 import numpy as np
@@ -122,17 +122,17 @@ def predictive_entropy(prob):
     return -1 * np.sum(np.log(prob) * prob)
 
 
-class AdamSave(Adam):
-    def get_gradients(self, loss, params):
-
-        def gradients_memory(ys, xs, grad_ys=None, **kwargs):
-            return MSG.gradients(ys, xs, grad_ys, checkpoints='memory', **kwargs)
-
-        grads = gradients_memory(loss, params)
-
-        if hasattr(self, 'clipnorm') and self.clipnorm > 0:
-            norm = K.sqrt(sum([K.sum(K.square(g)) for g in grads]))
-            grads = [clip_norm(g, self.clipnorm, norm) for g in grads]
-        if hasattr(self, 'clipvalue') and self.clipvalue > 0:
-            grads = [K.clip(g, -self.clipvalue, self.clipvalue) for g in grads]
-        return grads
+# class AdamSave(Adam):
+#     def get_gradients(self, loss, params):
+#
+#         def gradients_memory(ys, xs, grad_ys=None, **kwargs):
+#             return MSG.gradients(ys, xs, grad_ys, checkpoints='memory', **kwargs)
+#
+#         grads = gradients_memory(loss, params)
+#
+#         if hasattr(self, 'clipnorm') and self.clipnorm > 0:
+#             norm = K.sqrt(sum([K.sum(K.square(g)) for g in grads]))
+#             grads = [clip_norm(g, self.clipnorm, norm) for g in grads]
+#         if hasattr(self, 'clipvalue') and self.clipvalue > 0:
+#             grads = [K.clip(g, -self.clipvalue, self.clipvalue) for g in grads]
+#         return grads
