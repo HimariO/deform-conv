@@ -599,7 +599,7 @@ def get_test_cnn(class_n, trainable=True, dropout_sample=False):
 
 	l = block(l, 128, 128, 3, 'L2_3')
 
-	l = ConvOffset2D(128, name='conv31_offset')(l)
+	l = ConvOffset2D(128, name='conv31_offset')(l, use_resam=trainable)
 	l = Conv2D(256, (3, 3), strides=(2, 2), name='conv31', **conv_args)(l)
 	l = Activation('relu', name='conv31_relu')(l)
 	l = BatchNormalization(name='conv31_bn')(l)

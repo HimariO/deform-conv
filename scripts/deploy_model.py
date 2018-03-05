@@ -24,7 +24,8 @@ args = parser.parse_args()
 class_num = int(args.class_num) if args.class_num is not None else 6
 
 K.set_learning_phase(0)
-inputs, outputs = get_large_deform_cnn(class_num, trainable=True)
+inputs, outputs = get_test_cnn(class_num, trainable=False)
+# inputs, outputs = get_large_deform_cnn(class_num, trainable=True)
 # inputs, outputs = get_large_deform_cnn(class_num, trainable=True)
 model = Model(inputs=inputs, outputs=outputs)
 
@@ -32,7 +33,6 @@ if args.gpu_num:
     model = make_parallel(model, int(args.gpu_num))
 
 model.load_weights(args.weight)
-# model = load_model(args.weight)
 model.summary()
 
 if args.gpu_num:
@@ -55,28 +55,29 @@ print(model.outputs)
 new_inputs = []
 new_outputs = []
 
+
 if len(model.outputs) > 1:
     for i, n in zip(model.outputs, range(len(model.outputs))):
-        tf.identity(i, name='y_pred_%d' % n)
+        tf.identity(model.outputs[n], name='y_pred_%d' % n)
         new_outputs.append('y_pred_%d' % n)
 else:
     tf.identity(model.outputs[0], name='y_pred')
     new_outputs.append('y_pred')
 
 # print(colored('[model.inputs]', color='green'))
-sess = K.get_session()
 # print(new_inputs)
 print(colored('[new model.outputs]', color='green'))
 print(new_outputs)
 
+sess = K.get_session()
 
 names = [n.name for n in sess.graph.as_graph_def().node]
 t_names = [n.name for n in sess.graph.as_graph_def().node if 'tower' in n.name]
 
 print('-' * 100)
+print('Node\'s name contain \"pred\": ')
 print([n for n in names if 'pred' in n])
 print('-' * 100)
-# print(t_names)
 
 constant_graph = graph_util.convert_variables_to_constants(sess, sess.graph.as_graph_def(), new_outputs)
 constant_graph = graph_util.remove_training_nodes(constant_graph)

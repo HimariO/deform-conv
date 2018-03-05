@@ -31,8 +31,8 @@ elif '.pb' not in args.weight:
 # Config
 GPU = args.gpu
 
-img_size = 200
-class_num = 6
+img_size = 224
+class_num = 2
 batch_size = 32
 
 n_train = 88880
@@ -121,7 +121,7 @@ with tf.Session(config=config) as sess:
             print('-' * 100)
             print([n for n in names if 'y_pred' in n or 'out' in n])
             print('-' * 100)
-            x, y_pred = tf.import_graph_def(graph_def, return_elements=['input:0', 'out/Softmax:0'])
+            x, y_pred = tf.import_graph_def(graph_def, return_elements=['input:0', 'y_pred:0'])
 
         for i in range(0, len(inputs), batch_size):
             if i + batch_size > len(inputs):
@@ -139,5 +139,5 @@ with tf.Session(config=config) as sess:
 
         print(pred_counter)
         ans_list = ans_list[:len(pred_list)]
-        compare = list(map(lambda x: int(abs(x[0] - x[1]) <= 1), zip(ans_list, pred_list)))
+        compare = list(map(lambda x: int(abs(x[0] - x[1]) == 0), zip(ans_list, pred_list)))
         print(sum(compare) / len(compare))

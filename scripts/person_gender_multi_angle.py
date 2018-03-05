@@ -21,6 +21,7 @@ from deform_conv.callbacks import TensorBoard, SpreadSheet
 from deform_conv.cnn import *
 from deform_conv.mnist import get_gen
 from deform_conv.utils import make_parallel, montecarlo_prediction
+from deform_conv.losses import PGCE
 from dataset_gen_ import *
 
 from PIL import ImageFile
@@ -42,7 +43,7 @@ GPU = args.gpu
 
 class_num = 2
 batch_size = 32 * GPU_NUM
-n_train = 110000 # dataset size
+n_train = 150000 # dataset size
 # n_train = 96 * 10 # dataset size
 # n_test = batch_size * 10
 steps_per_epoch = n_train // batch_size
@@ -59,12 +60,12 @@ dataset = NPZ_gen(
 
 train_gen = dataset.get_some()
 # val_gen = dataset.get_val(num_batch=validation_steps)
-img_data = ImageDataGenerator()
+img_data = ImageDataGenerator(rescale=1./255)
 val_gen = img_data.flow_from_directory(
     '/home/share/Ron/a1059s101_1s1_0201',
     target_size=[224, 224],
     batch_size=batch_size,
-    shuffle=True
+    shuffle=True,
 )
 validation_steps = 3456//batch_size
 
@@ -91,8 +92,9 @@ with tf.Session(config=config) as sess:
 
         # sys.exit(0)
         # input("Press enter to start training...")
-        optim = Adam(1e-4)
-        loss = categorical_crossentropy
+        optim = Adam(1e-5)
+        # loss = categorical_crossentropy
+        loss = PGCE
 
         model.compile(optim, [loss], metrics=['accuracy'])
         checkpoint = ModelCheckpoint("deform_cnn_pg_best.h5", monitor='val_acc', save_best_only=True)
@@ -115,7 +117,7 @@ with tf.Session(config=config) as sess:
         else:
             # --
             # Evaluate deformable CNN
-            img_data = ImageDataGenerator()
+            img_data = ImageDataGenerator(rescale=1./255)
 
             class_dir = [os.path.join(args.img_dir, d) for d in os.listdir(args.img_dir) if os.path.isdir(os.path.join(args.img_dir, d))]
             img_files = [os.listdir(d) for d in class_dir]
@@ -146,9 +148,10 @@ with tf.Session(config=config) as sess:
                     target_size=[224, 224],
                     batch_size=batch_size
                 )
+                img_count = len(img_gen.filenames)
 
                 val_loss, val_acc = model.evaluate_generator(
-                    img_gen, steps=sum(map(lambda x: len(x), img_files)) // batch_size
+                    img_gen, steps=img_count // batch_size
                 )
 
                 print('val_loss:', val_loss)
