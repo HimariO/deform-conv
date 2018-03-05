@@ -626,16 +626,21 @@ class CapsulePooling2D(Layer):
 
 class ScaleConv(Layer):
 
-    def __init__(self, filter_num, filter_size, input_channel, branch=1, stride=[1, 1, 1, 1], regularizer=None, **kwargs):
+    def __init__(self, filter_num, filter_size, input_channel, branch=1, stride=[1, 1, 1, 1],
+                 kernel_initializer='uniform', kernel_regularizer=None, padding='SAME', **kwargs):
+        self.min_filter_size = 1
+
+        assert filter_size - self.min_filter_size > 3
+        assert branch % 2 == 1 and branch - 1 <= (filter_size - 1) // 2
+
         self.filter_num = filter_num
         self.filter_size = filter_size
-        self.min_filter_size = 1
-        assert filter_size - self.min_filter_size > 3
 
         self.stride = stride
         self.input_channel = input_channel
         self.branch = branch
-        self.regularizer = regularizer
+        self.kernel_regularizer = kernel_regularizer
+        self.kernel_initializer = kernel_initializer
 
         super(ScaleConv, self).__init__(**kwargs)
 
@@ -644,10 +649,26 @@ class ScaleConv(Layer):
         self.kernel = self.add_weight(
             name='%s_kernel' % self.name,
             shape=[self.filter_size, self.filter_size, self.input_channel, self.filter_num],
-            initializer='uniform',
+            initializer=self.kernel_initializer,
             trainable=True,
-            regularizer=self.regularizer,
+            regularizer=self.kernel_regularizer,
         )
+
+        self.resize_kernel = []
+        mid_branch = self.branch // 2 + 1
+        kernel_FHWC = tf.transpose(self.kernel, perm=[3, 0, 1, 2])
+
+        for b in range(1, self.branch + 1):
+            if b > mid_branch:
+                new_size = [self.filter_size + 2 * abs(b - mid_branch)] * 2
+            elif b < mid_branch:
+                new_size = [self.filter_size - 2 * abs(b - mid_branch)] * 2
+            else:
+                new_size = [self.filter_size] * 2
+
+            resize_kernel = tf.image.resize_images(kernel_FHWC, new_size)
+            resize_kernel = tf.transpose(resize_kernel, perm=[1, 2, 3, 0])
+            self.resize_kernel.append(resize_kernel)
 
         # self.branch_fc_kernel = []
         #
@@ -668,18 +689,27 @@ class ScaleConv(Layer):
         self.branch_conv_output = []
 
         kernel_FHWC = tf.transpose(self.kernel, perm=[3, 0, 1, 2])
+        mid_branch = self.branch // 2 + 1
 
-        for _ in range(self.branch):
-            self.branch_fc_output.append(
-                tf.layers.dense(GAP, 2, activation=tf.nn.sigmoid)
-            )
-
-            new_size = self.branch_fc_output[-1] * tf.cast(tf.shape(self.kernel)[0:2] - self.min_filter_size, tf.float32)
-            new_size += self.min_filter_size
-            new_size = tf.cast(new_size, tf.int32)
-
-            resize_kernel = tf.images.resize_images(kernel_FHWC, new_size)
-            resize_kernel = tf.transpose(resize_kernel, perm=[1, 2, 3, 0])
+        print('-' * 100)
+        for resize_kernel in self.resize_kernel:
+            # self.branch_fc_output.append(
+            #     tf.layers.dense(GAP, 2, activation=tf.nn.sigmoid)
+            # )
+            #
+            # new_size = self.branch_fc_output[-1] * tf.cast(tf.shape(self.kernel)[0:2] - self.min_filter_size, tf.float32)
+            # new_size += self.min_filter_size
+            # new_size = tf.cast(new_size, tf.int32)
+            # if b > mid_branch:
+            #     new_size = [self.filter_size + 2 * abs(b - mid_branch)] * 2
+            # elif b < mid_branch:
+            #     new_size = [self.filter_size - 2 * abs(b - mid_branch)] * 2
+            # else:
+            #     new_size = [self.filter_size] * 2
+            #
+            # resize_kernel = tf.image.resize_images(kernel_FHWC, new_size)
+            # resize_kernel = tf.transpose(resize_kernel, perm=[1, 2, 3, 0])
+            # print(new_size)
 
             self.branch_conv_output.append(
                 tf.nn.conv2d(

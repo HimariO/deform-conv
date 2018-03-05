@@ -621,3 +621,67 @@ def get_test_cnn(class_n, trainable=True, dropout_sample=False):
 	outputs = l = Activation('softmax', name='out')(l)
 
 	return inputs, outputs
+
+
+def get_scale_cnn(class_n, trainable=True, dropout_sample=False):
+
+	conv_args = {
+	 	'padding': 'same',
+		'kernel_initializer': 'Orthogonal',
+		'kernel_regularizer': OrthLocalReg2D
+	}
+
+	def block(X, F, O, L, block_name):
+		x_d = X
+
+		for l in range(L):
+			input_channel = F if l == 0 else O
+			x_d = ScaleConv(O, 5, input_channel, branch=3, name='%s_d%d' % (block_name, l), **conv_args)(x_d)
+			# x_d = Conv2D(O, (3, 3), name='%s_d%d' % (block_name, l), **conv_args)(x_d)
+			x_d = Activation('relu', name='%s_d%d_relu' % (block_name, l))(x_d)
+			x_d = BatchNormalization(name='%s_d%d_bn' % (block_name, l))(x_d)
+
+		if F == O:
+			x_d = Add()([x_d, X])
+		return x_d
+
+	inputs = l = Input((32, 32, 3), name='input')
+
+	l = ImageNorm()(l)
+# 100 50 25 13 6
+	l = Conv2D(32, (3, 3), name='conv11', **conv_args)(l)
+	l = Activation('relu', name='conv11_relu')(l)
+	l = BatchNormalization(name='conv11_bn')(l)
+
+	l = block(l, 32, 64, 3, 'L1_3')
+
+	l = Conv2D(128, (3, 3), strides=(2, 2), name='conv21', **conv_args)(l)
+	l = Activation('relu', name='conv21_relu')(l)
+	l = BatchNormalization(name='conv21_bn')(l)
+
+	l = block(l, 128, 128, 3, 'L2_3')
+
+	# l = ConvOffset2D(128, name='conv31_offset')(l)
+	l = Conv2D(256, (3, 3), strides=(2, 2), name='conv31', **conv_args)(l)
+	l = Activation('relu', name='conv31_relu')(l)
+	l = BatchNormalization(name='conv31_bn')(l)
+
+	l = block(l, 256, 256, 3, 'L3_3')
+
+	l = Conv2D(512, (3, 3), strides=(2, 2), name='conv41', **conv_args)(l)
+	l = Activation('relu', name='conv41_relu')(l)
+	l = BatchNormalization(name='conv41_bn')(l)
+
+	l = block(l, 512, 512, 4, 'L4_3')
+
+	l = GlobalAveragePooling2D()(l)
+
+	l = Dense(128, name='fc1')(l)
+	l = Activation('relu')(l)
+	l = BatchNormalization(name='fc1_bn')(l)
+
+	# l = GlobalAvgPool2D(name='avg_pool')(l)
+	l = Dense(class_n, name='fc2')(l)
+	outputs = l = Activation('softmax', name='out')(l)
+
+	return inputs, outputs
