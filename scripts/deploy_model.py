@@ -52,35 +52,36 @@ print(model.inputs)
 print(colored('[model.outputs]', color='blue'))
 print(model.outputs)
 
-new_inputs = []
 new_outputs = []
-
+new_outputs = []
+new_outputs_tf = []
 
 if len(model.outputs) > 1:
     for i, n in zip(model.outputs, range(len(model.outputs))):
-        tf.identity(model.outputs[n], name='y_pred_%d' % n)
+        new_outputs_tf.append(K.identity(model.outputs[n], name='y_pred_%d' % n))
         new_outputs.append('y_pred_%d' % n)
 else:
-    tf.identity(model.outputs[0], name='y_pred')
+    new_outputs_tf.append(K.identity(model.outputs[0], name='y_pred'))
     new_outputs.append('y_pred')
 
 # print(colored('[model.inputs]', color='green'))
-# print(new_inputs)
 print(colored('[new model.outputs]', color='green'))
 print(new_outputs)
 
 sess = K.get_session()
-
-names = [n.name for n in sess.graph.as_graph_def().node]
-t_names = [n.name for n in sess.graph.as_graph_def().node if 'tower' in n.name]
+graph_def = sess.graph.as_graph_def()
+names = [n.name for n in graph_def.node]
 
 print('-' * 100)
+print(names)
 print('Node\'s name contain \"pred\": ')
 print([n for n in names if 'pred' in n])
 print('-' * 100)
 
-constant_graph = graph_util.convert_variables_to_constants(sess, sess.graph.as_graph_def(), new_outputs)
-constant_graph = graph_util.remove_training_nodes(constant_graph)
+constant_graph = graph_util.convert_variables_to_constants(
+    sess, graph_def, new_outputs,
+)
+# constant_graph = graph_util.remove_training_nodes(constant_graph)
 graph_io.write_graph(constant_graph, './backup', 'deploy_model.pb', as_text=False)
 
 print(colored('[PB file saved]', color='green'))

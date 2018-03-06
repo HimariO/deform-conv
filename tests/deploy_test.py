@@ -79,7 +79,7 @@ with tf.Session(config=config) as sess:
             for img_p in img_ps:
                 pil_img = Image.open(img_p)
                 pil_img = pil_img.resize([img_size, img_size])
-                np_img = np.asarray(pil_img, dtype=np.uint8)
+                np_img  = np.asarray(pil_img, dtype=np.uint8) / 255.
                 # np_img /= 255
                 inputs.append(np_img)
                 ans_list.append(y)

@@ -86,13 +86,20 @@ class NPZ_gen:
 
         self.output_img_num = 0
         self.dataset_size = 0
-        self.next_one = None  # npz object or 'end' str
+        # self.next_one = None  # npz object or 'end' str
+        self.running = True
 
         self.reader_thread = threading.Thread(target=self._auto_load_npz, name="reader_thread[0]")
         self.reader_thread.daemon = True
         self.reader_queue = Queue()
         self.reader_waittime = 0
         self.reader_timeout = 30
+
+        self.dispatch_threads = threading.Thread(target=self._dispatch_batchs, name="dispatch_thread[0]")
+        self.dispatch_threads.daemon = True
+        self.preprocess_threads = [threading.Thread(target=self._process_batch, name="preprocessing_thread[%d]" % i) for i in range(10)]
+        self.dispatch_queue = Queue(maxsize=1000)
+        self.batch_queue = Queue(maxsize=100)
 
         if dataset_size is None:
             for npz_path in self.datas:
@@ -106,13 +113,17 @@ class NPZ_gen:
         print(colored("Get training datas: ", color='green'), self.datas)
         print(colored("Get validate datas: ", color='green'), self.val_datas)
 
-        for npz_path in self.datas * (self.epoch * 2):
+        for npz_path in (self.datas * (self.epoch * 2))[1:]:
             self.reader_queue.put(npz_path)
 
         print("Init Generator[%s]" % dataset_dir)
         self.next_one = self._load_npz(self.datas[0])
         # print(self.next_one.keys())
         self.reader_thread.start()
+        self.dispatch_threads.start()
+        for thread in self.preprocess_threads:
+            thread.daemon = True
+            thread.start()
 
     def __str__(self):
         return self.datas + " iteration[%d/%d]" % (self.output_img_num, self.dataset_size)
@@ -121,7 +132,6 @@ class NPZ_gen:
         train_npzs = [re.match('dataset_(\d+)(_\w+)*\.npz', f) for f in os.listdir(path=path)]
         val_npzs = [re.match('validate_(\d+)(_\w+)*\.npz', f) for f in os.listdir(path=path)]
 
-        # [(f.string, int(f.group(1))) for f in train_npzs if f is not None]
         train_npzs = [os.path.join(path, f.string) for f in train_npzs if f is not None]
         val_npzs = [os.path.join(path, f.string) for f in val_npzs if f is not None]
 
@@ -147,7 +157,9 @@ class NPZ_gen:
         single_wait = 0.1
         if self.reader_waittime < self.reader_timeout:
             if self.next_one is None:
-                print('wait for next file.')
+                sys.stdout.write('\r [%f/%f sec] waiting for NPZ.  ༼ つ ◕_◕ ༽つ   ❤ ☀ ☆ ☂ ☻ ♞ ☯ ' % (self.reader_waittime, self.reader_timeout))
+                sys.stdout.flush()
+
                 self.reader_waittime += single_wait
                 time.sleep(single_wait)
                 return True  # you should wait
@@ -158,35 +170,54 @@ class NPZ_gen:
             print('giveup waiting.')
             return False  # go on and trigger excepetion.
 
-    @threadsafe_generator
-    def get_some(self):
-        # loop through different npy file
-        num_cores = multiprocessing.cpu_count()
-        with Parallel(n_jobs=num_cores) as parallel:
-            for npz_path in self.datas * (self.epoch * 2):
-                # npz = np.load(npz_path)
-                while(self._wait_load()):
-                    pass
+    def _dispatch_batchs(self):
+        for npz_path in self.datas * (self.epoch * 2):
+            # npz = np.load(npz_path)
+            while(self._wait_load()):
+                pass
 
-                npz = self.next_one
-                self.next_one = None
-                keys = list(npz.keys())
-                random.shuffle(keys)
+            npz = self.next_one
+            self.next_one = None
+            keys = list(npz.keys())
+            random.shuffle(keys)
 
-                npz_size = len(npz.keys())
-                self.output_img_num += npz_size
+            npz_size = len(npz.keys())
+            self.output_img_num += npz_size
 
-                # loop through datas inside npy file
-                for i in range(0, npz_size, self.batch_size):
-                    if (i + self.batch_size) <= npz_size:
-                        B = self._process_data(npz, i, i + self.batch_size, keys, parallel, **self.data_preprocess)
-                        X, Y = B[0], B[1]
-                        yield X, Y
-                    else:
-                        break
-                del npz
+            # loop through datas inside npy file
+            for i in range(0, npz_size, self.batch_size):
+                if (i + self.batch_size) <= npz_size:
+                    self.dispatch_queue.put(
+                        (npz, i, i + self.batch_size)
+                    )
+                else:
+                    break
+
+            self.dispatch_queue.join()
+            del npz
 
         self.next_one = 'end'
+
+    def _process_batch(self):
+        num_cores = multiprocessing.cpu_count()
+        with Parallel(n_jobs=num_cores) as parallel:
+            while self.running:
+                npz, start_id, end_id = self.dispatch_queue.get()
+                keys = list(npz.keys())
+                B = self._process_data(npz, start_id, end_id, keys, parallel, **self.data_preprocess)
+                self.batch_queue.put(B)
+                self.dispatch_queue.task_done()
+
+    @threadsafe_generator
+    def get_some(self):
+        while self.next_one != 'end' and not self.batch_queue.empty():
+            yield self.batch_queue.get()
+            self.batch_queue.task_done()
+
+        self.running = False
+        print('-' * 100)
+        print('End! ', self.next_one, self.batch_queue.empty())
+        print('-' * 100)
 
     @threadsafe_generator
     def get_val(self, num_batch=10):
@@ -260,7 +291,7 @@ class NPZ_gen:
         new_size_scale = args['new_size_scale']
 
         tar_id = item['label']
-        img_fp = item['img'] / 255. if not keras_model else item['img'].astype(np.float32)
+        img_fp = item['img'] / 255.
         blur_level = int(10 * random.random()) if random_blur else 0
 
         if flip:
@@ -292,16 +323,16 @@ class NPZ_gen:
                 img_fp = img_fp.clip(min=0, max=255) if keras_model else img_fp.clip(min=0, max=1)
 
         if random_noise and random.random()  > 0.33:
-            img_fp = img_fp / 255. if keras_model else img_fp
+            # img_fp = img_fp / 255. if keras_model else img_fp
             img_fp = util.random_noise(img_fp, var=random_noise)
-            img_fp = img_fp * 255. if keras_model else img_fp
-            img_fp = img_fp.clip(min=0, max=255) if keras_model else img_fp.clip(min=0, max=1)
+            # img_fp = img_fp * 255. if keras_model else img_fp
+            img_fp = img_fp.clip(min=0, max=1)
 
         if random_blur and random.random()  > 0.5:
-            img_fp = img_fp / 255. if keras_model else img_fp
+            # img_fp = img_fp / 255. if keras_model else img_fp
             img_fp = filters.gaussian(img_fp, sigma=blur_level, multichannel=True)
-            img_fp = img_fp * 255. if keras_model else img_fp
-            img_fp = img_fp.clip(min=0, max=255) if keras_model else img_fp.clip(min=0, max=1)
+            # img_fp = img_fp * 255. if keras_model else img_fp
+            img_fp = img_fp.clip(min=0, max=1)
 
         if resize:
             img_fp = transform.resize(img_fp, [resize, resize, 3], preserve_range=True)
