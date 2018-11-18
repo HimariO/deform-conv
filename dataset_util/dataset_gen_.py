@@ -343,28 +343,34 @@ class NPZ_gen:
         """
         onehot
         """
-        if tar_id >= 0 and tar_id < class_num:
-            if soft_onehot:
-                delta1 = (random.random() - 0.5) * 2 * 0.1 if False else 0
-                delta2 = (random.random() - 0.5) * 2 * 0.1 if False else 0
+        if type(tar_id) is int:
+            if tar_id >= 0 and tar_id < class_num:
+                if soft_onehot:
+                    delta1 = (random.random() - 0.5) * 2 * 0.1 if False else 0
+                    delta2 = (random.random() - 0.5) * 2 * 0.1 if False else 0
 
-                if tar_id != 0 and tar_id != class_num - 1:
-                    img_onehot[tar_id] = 0.8 + delta1 + delta2  # int
-                    img_onehot[tar_id - 1] = 0.1 + delta1
-                    img_onehot[tar_id + 1] = 0.1 + delta2
-                else:
-                    img_onehot[tar_id] = 0.9 + delta1 # int
-                    if tar_id == 0:
-                        img_onehot[tar_id + 1] = 0.1 + delta1
-                    else:
+                    if tar_id != 0 and tar_id != class_num - 1:
+                        img_onehot[tar_id] = 0.8 + delta1 + delta2  # int
                         img_onehot[tar_id - 1] = 0.1 + delta1
-            else:
-                img_onehot[tar_id] = class_num
-        else:  # unclassifiable sample
-            if gate:
-                img_onehot[:] = 1. / class_num
-            else:
-                img_onehot[-1] = 1.
+                        img_onehot[tar_id + 1] = 0.1 + delta2
+                    else:
+                        img_onehot[tar_id] = 0.9 + delta1 # int
+                        if tar_id == 0:
+                            img_onehot[tar_id + 1] = 0.1 + delta1
+                        else:
+                            img_onehot[tar_id - 1] = 0.1 + delta1
+                else:
+                    img_onehot[tar_id] = class_num
+            else:  # unclassifiable sample
+                if gate:
+                    img_onehot[:] = 1. / class_num
+                else:
+                    img_onehot[-1] = 1.
+        elif type(tar_id) is list:
+            for tar in tar_id:
+                img_onehot[tar] = 1.
+        else:
+            raise ValueError('Unsupported label type from npz!')
 
         """
         Additional labels

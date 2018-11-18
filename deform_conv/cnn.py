@@ -121,7 +121,7 @@ def get_ewc_cnn(class_n, trainable=True):
 	return inputs, outputs
 
 
-def get_large_deform_cnn(class_num, trainable=False, dropout_sample=False):
+def get_large_deform_cnn(class_num, trainable=False, dropout_sample=False, output_activation='softmax'):
 	init = Orthogonal(gain=1.0, seed=None)
 
 	inputs = l = Input((None, None, 3), name='input')
@@ -225,7 +225,7 @@ def get_large_deform_cnn(class_num, trainable=False, dropout_sample=False):
 	l = BatchNormalization()(l)
 
 	l = Dense(class_num, name='fc3', trainable=trainable)(l)
-	outputs = l = Activation('softmax', name='out')(l)
+	outputs = l = Activation(output_activation, name='out')(l)
 
 	return inputs, outputs
 
